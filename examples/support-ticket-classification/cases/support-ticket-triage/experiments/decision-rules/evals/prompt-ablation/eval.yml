@@ -1,6 +1,6 @@
 schema_version: 1
 name: prompt-ablation
-status: draft
+status: active
 question: >
   Do explicit routing rules improve exact-match support-ticket classification accuracy?
 description: >
@@ -18,7 +18,8 @@ defaults:
   retries: 1
   budget_usd: 2.00
   parameters:
-    max_tokens: 256
+    max_tokens: 1024
+    effort: minimal
 
 arms:
   - id: basic-prompt
@@ -34,8 +35,8 @@ arms:
       user: ../../prompts/user.md.j2
 
 runs:
-  - model: gpt-5.4-mini
-    provider: openai
+  - model: muse-spark-1.2
+    provider: meta
     arms:
       - basic-prompt
       - decision-rules

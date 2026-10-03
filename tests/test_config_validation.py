@@ -32,17 +32,17 @@ class ModelValidationTests(unittest.TestCase):
         self.eval_path.write_text(source.replace(old, new), encoding="utf-8")
 
     def test_known_model_provider_mismatch_fails(self) -> None:
-        self.replace("provider: openai", "provider: anthropic")
-        with self.assertRaisesRegex(ConfigError, "belongs to provider 'openai'"):
+        self.replace("provider: meta", "provider: anthropic")
+        with self.assertRaisesRegex(ConfigError, "belongs to provider 'meta'"):
             load_eval_context(self.project, EVAL_ID)
 
     def test_invalid_known_effort_fails(self) -> None:
-        self.replace("max_tokens: 256", "max_tokens: 256\n    effort: impossible")
+        self.replace("effort: minimal", "effort: impossible")
         with self.assertRaisesRegex(ConfigError, "does not accept effort 'impossible'"):
             load_eval_context(self.project, EVAL_ID)
 
     def test_unknown_model_with_explicit_provider_is_allowed(self) -> None:
-        self.replace("model: gpt-5.4-mini", "model: private-preview-model")
+        self.replace("model: muse-spark-1.2", "model: private-preview-model")
         context = load_eval_context(self.project, EVAL_ID)
         self.assertEqual(context.evaluation["runs"][0]["model"], "private-preview-model")
 

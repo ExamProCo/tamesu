@@ -70,6 +70,9 @@ Portable parameters are:
 Additional keys are provider-specific. OpenAI, Grok, and Anthropic pass non-conflicting
 keys through to their request payloads. Gemini accepts `generation_config`; Meta accepts
 chat-completions fields plus `structured_output`; Bedrock accepts `structured_output`.
+For Meta, Tamesu maps portable `max_tokens` to Chat Completions'
+`max_completion_tokens`. Muse reasoning and visible output share that allowance, so use a
+larger cap or a lower `effort` when a response ends with `finish_reason: length`.
 
 ## Structured output behavior
 

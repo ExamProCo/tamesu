@@ -458,7 +458,7 @@ Generation outputs, requests, responses, and original judgments are immutable.
 Each provider attempt writes a versioned event immediately and flushes it to disk:
 
 ```json
-{"schema_version":1,"event":"provider_attempt","run_id":"...","item_id":"duplicate-charge","stage":"generate","attempt":1,"at":"...","provider":"openai","model":"gpt-5.4-mini","ok":true,"duration_ms":842,"request":{"system_sha256":"sha256:...","user_sha256":"sha256:...","output_schema_sha256":"sha256:...","parameters_sha256":"sha256:..."},"provider_request_id":"resp_123","response_metadata":{"status":"completed"},"usage":{"input_tokens":110,"output_tokens":28},"cost_usd":0.000209}
+{"schema_version":1,"event":"provider_attempt","run_id":"...","item_id":"duplicate-charge","stage":"generate","attempt":1,"at":"...","provider":"meta","model":"muse-spark-1.2","ok":true,"duration_ms":842,"request":{"system_sha256":"sha256:...","user_sha256":"sha256:...","output_schema_sha256":"sha256:...","parameters_sha256":"sha256:..."},"provider_request_id":"chat_123","response_metadata":{},"usage":{"input_tokens":110,"output_tokens":28},"cost_usd":0.000257}
 ```
 
 Failed calls use the same shape with `ok: false` and a normalized error containing type,

@@ -34,7 +34,7 @@ def status_summary(plan: Plan) -> dict[str, Any]:
         if run_id in banked_ids:
             classification = "banked"
         elif manifest.get("probe"):
-            classification = "partial"
+            classification = "failed" if state == "failed" else "partial"
         elif specification not in planned_fingerprints:
             classification = "stale"
         elif state in {"planned", "running", "partial"}:

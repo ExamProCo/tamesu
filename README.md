@@ -55,6 +55,7 @@ Case → Experiment → Eval → Run
 - [Repository and file structure](docs/file-structure.md)
 - [Manifest reference](docs/manifests.md)
 - [Command-line interface](docs/cli.md)
+- [Configuration](docs/configuration.md)
 - [Providers and models](docs/providers.md)
 - [Logging and execution evidence](docs/logging.md)
 - [Contributor development guide](docs/development.md)

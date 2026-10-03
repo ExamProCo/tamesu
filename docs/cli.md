@@ -31,6 +31,18 @@ current repository and keep all evaluation evidence inspectable on disk.
 `rescore` never calls a provider in Tamesu 0.1. It recomputes deterministic scores from
 stored text outputs.
 
+## Global options
+
+Select a highest-precedence environment configuration directory with:
+
+```sh
+tamesu --config-dir /secure/tamesu/customer-a plan <eval-id>
+```
+
+The directory must contain `.env`, and the global option must appear before the
+subcommand. Global, project, process, and explicit configuration precedence is documented
+in [Configuration](configuration.md).
+
 ## Identifying an eval
 
 Commands that operate on an eval accept its repository-relative identity:
@@ -54,7 +66,7 @@ cases/support-ticket-triage/experiments/decision-rules/evals/prompt-ablation/eva
 Commands that operate on one execution accept its full run ID:
 
 ```text
-gpt-5-4-mini--decision-rules--rep2--20261002-143012-123456--a81c39f2
+muse-spark-1-2--decision-rules--rep2--20261002-143012-123456--a81c39f2
 ```
 
 Human-readable labels help with inspection, but only a full run ID uniquely identifies
@@ -174,13 +186,19 @@ For each selected configuration, the command creates a new run directory and wri
 resolved `run.yml` before making provider calls. Results and call logs are flushed as work
 completes so an interrupted execution can be inspected and resumed.
 
+Each emitted run ID is prefixed by its terminal state, such as `complete`, `partial`, or
+`failed`. The same line reports completed and failed item counts, the primary score, and
+recorded cost. If any selected run fails, the command exits nonzero and summarizes
+repeated item errors without exposing credentials; use `status` and the JSONL log for full
+evidence.
+
 ### Select a model
 
 Use `--only` to execute matching planned model configurations without editing the eval:
 
 ```sh
 tamesu run support-ticket-triage/decision-rules/prompt-ablation \
-  --only gpt-5.4-mini
+  --only muse-spark-1.2
 ```
 
 Filtering changes which owed work is attempted in this invocation. It does not change the
@@ -192,13 +210,14 @@ Use `--limit-items` for a small integration probe:
 
 ```sh
 tamesu run support-ticket-triage/decision-rules/prompt-ablation \
-  --only gpt-5.4-mini \
+  --only muse-spark-1.2 \
   --limit-items 2
 ```
 
 A limited run is marked partial and never satisfies a planned repetition, even when every
 limited item succeeds. Its artifacts remain useful for diagnosing prompts, providers, and
-task adapters.
+task adapters. After a successful probe, run the command again without `--limit-items` to
+produce formal evidence accepted by `compare`.
 
 ### Force a fresh run
 
@@ -206,7 +225,7 @@ Use `--force` to execute another fresh sample when compatible evidence already e
 
 ```sh
 tamesu run support-ticket-triage/decision-rules/prompt-ablation \
-  --only gpt-5.4-mini \
+  --only muse-spark-1.2 \
   --force
 ```
 
@@ -251,7 +270,7 @@ Continue one compatible partial run from its last valid item and stage.
 
 ```sh
 tamesu resume \
-  gpt-5-4-mini--decision-rules--rep2--20261002-143012-123456--a81c39f2
+  muse-spark-1-2--decision-rules--rep2--20261002-143012-123456--a81c39f2
 ```
 
 Before reusing any artifact, `resume` verifies:
@@ -274,7 +293,7 @@ Recompute a run's scores and report from stored outputs.
 
 ```sh
 tamesu rescore \
-  gpt-5-4-mini--decision-rules--rep2--20261002-143012-123456--a81c39f2
+  muse-spark-1-2--decision-rules--rep2--20261002-143012-123456--a81c39f2
 ```
 
 Rescoring:

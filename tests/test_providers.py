@@ -9,6 +9,7 @@ from unittest.mock import patch
 from tamesu.providers.anthropic import AnthropicProvider
 from tamesu.providers.bedrock import BedrockProvider
 from tamesu.providers.gemini import GeminiProvider
+from tamesu.errors import ProviderError
 from tamesu.providers.meta import MetaProvider
 from tamesu.providers.openai import GrokProvider
 
@@ -92,8 +93,37 @@ class ProviderSerializationTests(unittest.TestCase):
         )
         request, payload = request_payload(urlopen)
         self.assertTrue(request.full_url.endswith("/chat/completions"))
+        self.assertEqual(payload["max_completion_tokens"], 16_000)
+        self.assertNotIn("max_tokens", payload)
         self.assertEqual(payload["reasoning_effort"], "medium")
         self.assertEqual(payload["response_format"]["json_schema"]["schema"], SCHEMA)
+
+    @patch.dict(os.environ, {"META_API_KEY": "secret"}, clear=False)
+    @patch("urllib.request.urlopen")
+    def test_meta_token_cap_preserves_usage_and_cost(self, urlopen: object) -> None:
+        urlopen.return_value = FakeResponse(  # type: ignore[attr-defined]
+            {
+                "id": "chat_capped",
+                "model": "muse-spark-1.2",
+                "choices": [{"finish_reason": "length", "message": {"content": ""}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 256},
+            }
+        )
+        with self.assertRaises(ProviderError) as raised:
+            MetaProvider().generate_text(
+                model="muse-spark-1.2",
+                system_prompt="system",
+                user_prompt="user",
+                output_schema=SCHEMA,
+                parameters={"effort": "minimal", "max_tokens": 256},
+                timeout_seconds=30,
+            )
+
+        error = raised.exception
+        self.assertIn("max_completion_tokens (256)", str(error))
+        self.assertEqual(error.request_id, "chat_capped")
+        self.assertEqual(error.usage["output_tokens"], 256)
+        self.assertGreater(error.cost_usd or 0, 0)
 
     @patch.dict(os.environ, {"GROK_API_KEY": "secret"}, clear=False)
     @patch("urllib.request.urlopen")

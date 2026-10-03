@@ -5,10 +5,12 @@ import os
 import shutil
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from tamesu.cli import command_close
+from tamesu.cli import command_close, command_compare, command_run
 from tamesu.config import load_eval_context, load_yaml
 from tamesu.errors import ExecutionError, ProviderError
 from tamesu.models import ProviderResponse
@@ -22,7 +24,7 @@ EVAL_ID = "support-ticket-triage/decision-rules/prompt-ablation"
 
 
 class FixtureProvider:
-    name = "openai"
+    name = "meta"
 
     def __init__(self) -> None:
         self.calls = 0
@@ -40,7 +42,7 @@ class FixtureProvider:
             raise ProviderError("temporary fixture failure", retryable=True)
         if self.unexpected_failures_remaining:
             self.unexpected_failures_remaining -= 1
-            raise RuntimeError(f"unexpected fixture failure {os.environ.get('OPENAI_API_KEY', '')}")
+            raise RuntimeError(f"unexpected fixture failure {os.environ.get('META_API_KEY', '')}")
         answer = classify(str(kwargs["user_prompt"]))
         return ProviderResponse(
             text=json.dumps(answer),
@@ -87,7 +89,11 @@ class ExampleIntegrationTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         source = Path(__file__).parents[1] / "examples" / "support-ticket-classification"
         self.project = Path(self.temporary.name) / "project"
-        shutil.copytree(source, self.project)
+        shutil.copytree(
+            source,
+            self.project,
+            ignore=shutil.ignore_patterns("runs", "logs", "leaderboard.md"),
+        )
         eval_path = (
             self.project
             / "cases/support-ticket-triage/experiments/decision-rules/evals/prompt-ablation/eval.yml"
@@ -169,6 +175,54 @@ class ExampleIntegrationTests(unittest.TestCase):
         self.assertEqual(closed.evaluation["status"], "complete")
         self.assertEqual(self.provider.calls, 40)
 
+    def test_failed_probes_are_visible_in_cli_status_and_run_output(self) -> None:
+        self.provider.unexpected_failures_remaining = 4
+        stdout = StringIO()
+        stderr = StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = command_run(
+                self.project,
+                EVAL_ID,
+                only="muse-spark-1.2",
+                limit_items=1,
+                force=False,
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue().count("failed\t"), 4)
+        self.assertIn("4 run(s) failed", stderr.getvalue())
+
+        plan = build_plan(load_eval_context(self.project, EVAL_ID))
+        summary = status_summary(plan)
+        self.assertEqual(summary["counts"]["failed"], 4)
+        self.assertEqual(summary["counts"]["partial"], 0)
+
+        compare_output = StringIO()
+        with redirect_stdout(compare_output):
+            self.assertEqual(command_compare(self.project, EVAL_ID), 0)
+        self.assertIn("Excluded evidence: 4 failed", compare_output.getvalue())
+        self.assertIn("Planned runs still owed: 4", compare_output.getvalue())
+
+    def test_successful_probe_output_includes_completion_score_and_cost(self) -> None:
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            exit_code = command_run(
+                self.project,
+                EVAL_ID,
+                only="muse-spark-1.2",
+                limit_items=2,
+                force=False,
+            )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(output.count("partial\t"), 4)
+        self.assertEqual(output.count("items=2/2\tfailed=0"), 4)
+        self.assertEqual(output.count("exact_match_rate=1.0000"), 4)
+        self.assertEqual(output.count("cost_usd=0.002000"), 4)
+        self.assertIn("Probe items: 8/8 completed; 0 failed.", output)
+        self.assertIn("excluded from formal comparisons", output)
+
     def test_resume_retries_a_transient_item(self) -> None:
         eval_path = (
             self.project
@@ -180,7 +234,7 @@ class ExampleIntegrationTests(unittest.TestCase):
         )
         context = load_eval_context(self.project, EVAL_ID)
         self.provider.failures_remaining = 1
-        run_ids = run_eval(context, only="gpt-5.4-mini", limit_items=1)
+        run_ids = run_eval(context, only="muse-spark-1.2", limit_items=1)
 
         first_run_dir = context.eval_dir / "runs" / run_ids[0]
         first_manifest = load_yaml(first_run_dir / "run.yml")
@@ -205,14 +259,14 @@ class ExampleIntegrationTests(unittest.TestCase):
         self.assertEqual([event["resumed"] for event in starts], [False, True])
         self.assertTrue(any(event["event"] == "artifacts_written" for event in events))
 
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-fixture-secret"})
+    @patch.dict(os.environ, {"META_API_KEY": "sk-fixture-secret"})
     def test_logs_and_results_redact_secrets(self) -> None:
         context = load_eval_context(self.project, EVAL_ID)
         self.provider.response_metadata = {
             "authorization": "Bearer sk-fixture-secret",
             "debug": "key=sk-fixture-secret",
         }
-        run_ids = run_eval(context, only="gpt-5.4-mini", limit_items=1)
+        run_ids = run_eval(context, only="muse-spark-1.2", limit_items=1)
         run_id = run_ids[0]
         log_text = (context.eval_dir / "logs" / f"{run_id}.jsonl").read_text(
             encoding="utf-8"
@@ -225,11 +279,11 @@ class ExampleIntegrationTests(unittest.TestCase):
         self.assertIn("[REDACTED]", log_text)
         self.assertIn("[REDACTED]", result_text)
 
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-unexpected-secret"})
+    @patch.dict(os.environ, {"META_API_KEY": "sk-unexpected-secret"})
     def test_unexpected_provider_exception_is_logged_and_terminal(self) -> None:
         context = load_eval_context(self.project, EVAL_ID)
         self.provider.unexpected_failures_remaining = 1
-        run_ids = run_eval(context, only="gpt-5.4-mini", limit_items=1)
+        run_ids = run_eval(context, only="muse-spark-1.2", limit_items=1)
         run_id = run_ids[0]
         run_dir = context.eval_dir / "runs" / run_id
         manifest = load_yaml(run_dir / "run.yml")
@@ -248,7 +302,7 @@ class ExampleIntegrationTests(unittest.TestCase):
         context = load_eval_context(self.project, EVAL_ID)
         with patch("tamesu.runner.build_report", side_effect=RuntimeError("report failed")):
             with self.assertRaisesRegex(ExecutionError, "Could not finalize run"):
-                run_eval(context, only="gpt-5.4-mini", limit_items=1)
+                run_eval(context, only="muse-spark-1.2", limit_items=1)
 
         run_dirs = list((context.eval_dir / "runs").iterdir())
         self.assertEqual(len(run_dirs), 1)

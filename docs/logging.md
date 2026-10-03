@@ -62,7 +62,7 @@ therefore has another `run_started` event with `resumed: true`.
 Written once for every provider invocation, successful or failed:
 
 ```json
-{"schema_version":1,"event":"provider_attempt","at":"2026-10-03T14:30:12Z","run_id":"...","item_id":"duplicate-charge","stage":"generate","attempt":1,"provider":"openai","model":"gpt-5.4-mini","ok":true,"duration_ms":842,"request":{"system_sha256":"sha256:...","user_sha256":"sha256:...","output_schema_sha256":"sha256:...","parameters_sha256":"sha256:..."},"provider_request_id":"resp_123","response_metadata":{"status":"completed"},"usage":{"input_tokens":110,"output_tokens":28},"cost_usd":0.000209}
+{"schema_version":1,"event":"provider_attempt","at":"2026-10-03T14:30:12Z","run_id":"...","item_id":"duplicate-charge","stage":"generate","attempt":1,"provider":"meta","model":"muse-spark-1.2","ok":true,"duration_ms":842,"request":{"system_sha256":"sha256:...","user_sha256":"sha256:...","output_schema_sha256":"sha256:...","parameters_sha256":"sha256:..."},"provider_request_id":"chat_123","response_metadata":{},"usage":{"input_tokens":110,"output_tokens":28},"cost_usd":0.000257}
 ```
 
 Tamesu logs prompt, schema, and parameter hashes rather than raw prompts or provider
@@ -73,7 +73,7 @@ A failed attempt has `ok: false`, normalized `error` fields, an empty `usage` ma
 `cost_usd: null` when the provider did not return trustworthy billing information:
 
 ```json
-{"schema_version":1,"event":"provider_attempt","at":"2026-10-03T14:30:13Z","run_id":"...","item_id":"duplicate-charge","stage":"generate","attempt":1,"provider":"openai","model":"gpt-5.4-mini","ok":false,"duration_ms":301,"request":{"system_sha256":"sha256:...","user_sha256":"sha256:...","output_schema_sha256":"sha256:...","parameters_sha256":"sha256:..."},"provider_request_id":"req_123","response_metadata":{},"usage":{},"cost_usd":null,"error":{"type":"ProviderError","message":"rate limited","retryable":true,"status_code":429}}
+{"schema_version":1,"event":"provider_attempt","at":"2026-10-03T14:30:13Z","run_id":"...","item_id":"duplicate-charge","stage":"generate","attempt":1,"provider":"meta","model":"muse-spark-1.2","ok":false,"duration_ms":301,"request":{"system_sha256":"sha256:...","user_sha256":"sha256:...","output_schema_sha256":"sha256:...","parameters_sha256":"sha256:..."},"provider_request_id":"req_123","response_metadata":{},"usage":{},"cost_usd":null,"error":{"type":"ProviderError","message":"rate limited","retryable":true,"status_code":429}}
 ```
 
 Unknown failure cost does not mean the provider guaranteed the attempt was free.

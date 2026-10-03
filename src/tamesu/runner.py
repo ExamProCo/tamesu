@@ -402,9 +402,9 @@ def _process_item(
                 duration_ms=latency_ms,
                 request=prompt_metadata,
                 provider_request_id=exc.request_id,
-                response_metadata={},
-                usage={},
-                cost_usd=None,
+                response_metadata=exc.response_metadata,
+                usage=exc.usage,
+                cost_usd=exc.cost_usd,
                 error={
                     "type": type(exc).__name__,
                     "message": str(final_error),
@@ -456,8 +456,9 @@ def _process_item(
             "generation": {
                 "provider_request_id": final_error.request_id,
                 "latency_ms": latency_ms,
-                "usage": {},
-                "cost_usd": None,
+                "usage": final_error.usage,
+                "cost_usd": final_error.cost_usd,
+                "response_metadata": log.redact(final_error.response_metadata),
             },
             "prompt": {
                 "system_sha256": prompt_metadata["system_sha256"],
@@ -550,6 +551,9 @@ def _safe_provider_error(error: ProviderError, log: CallLogWriter) -> ProviderEr
         retryable=error.retryable,
         status_code=error.status_code,
         request_id=error.request_id,
+        usage=error.usage,
+        cost_usd=error.cost_usd,
+        response_metadata=log.redact(error.response_metadata),
     )
 
 

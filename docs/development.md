@@ -48,6 +48,7 @@ src/tamesu/
 ├── cli.py
 ├── config.py
 ├── discovery.py
+├── environment.py
 ├── errors.py
 ├── planner.py
 ├── pricing.py
@@ -80,6 +81,7 @@ src/tamesu/
 | `cli.py` | Parse commands and options, invoke application services, and format results |
 | `config.py` | Load YAML safely and validate typed manifest models |
 | `discovery.py` | Find cases, experiments, evals, datasets, and runs inside a repository |
+| `environment.py` | Parse and layer global, project, process, and explicit configuration |
 | `errors.py` | Define user-facing configuration, execution, and provider failures |
 | `planner.py` | Expand an eval into concrete run specifications and calculate work owed |
 | `pricing.py` | Estimate expected cost and maximum priced exposure for a plan |

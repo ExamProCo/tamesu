@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -16,6 +17,7 @@ from .discovery import (
     find_run_dir,
 )
 from .errors import TamesuError
+from .environment import load_environment
 from .planner import build_plan
 from .providers import get_provider
 from .providers.models import MODELS, PRICING_VERIFIED_AT
@@ -31,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="File-based evaluation tooling for reproducible AI experiments.",
     )
     parser.add_argument("--version", action="version", version=f"tamesu {__version__}")
+    parser.add_argument(
+        "--config-dir",
+        type=Path,
+        help="Load the highest-precedence .env from this directory.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     lint_parser = subparsers.add_parser("lint", help="Validate evaluation files.")
@@ -88,10 +95,14 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 def dispatch(args: argparse.Namespace) -> int:
     if args.command == "lint":
+        project_root = find_project_root(Path(args.path).resolve())
+        load_environment(project_root, config_dir=args.config_dir)
         return command_lint(Path(args.path))
     if args.command == "models":
+        load_environment(None, config_dir=args.config_dir)
         return command_models(args.provider)
     project_root = find_project_root()
+    load_environment(project_root, config_dir=args.config_dir)
     if args.command == "list":
         return command_list(project_root)
     if args.command == "plan":
@@ -257,8 +268,68 @@ def command_run(
     if not run_ids:
         print("No work owed. Use --force to create another fresh run.")
         return 0
+    states: Counter[str] = Counter()
+    failure_messages: Counter[str] = Counter()
+    primary = context.evaluation["metrics"]["primary"]
+    selected_total = 0
+    completed_total = 0
+    failed_total = 0
     for run_id in run_ids:
-        print(run_id)
+        run_dir = context.eval_dir / "runs" / run_id
+        manifest = load_yaml(run_dir / "run.yml")
+        state = str(manifest.get("state", "unknown"))
+        states[state] += 1
+        fields = [state, run_id]
+        report_path = run_dir / "report.yml"
+        if report_path.is_file():
+            report = load_yaml(report_path)
+            completion = report.get("completion", {})
+            selected = int(completion.get("selected_items", 0))
+            completed = int(completion.get("completed_items", 0))
+            failed = int(completion.get("failed_items", 0))
+            selected_total += selected
+            completed_total += completed
+            failed_total += failed
+            fields.extend((f"items={completed}/{selected}", f"failed={failed}"))
+            primary_value = report.get("metrics", {}).get(primary)
+            if isinstance(primary_value, (int, float)) and not isinstance(
+                primary_value, bool
+            ):
+                fields.append(f"{primary}={primary_value:.4f}")
+            cost = report.get("totals", {}).get("cost_usd")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+                fields.append(f"cost_usd={cost:.6f}")
+            else:
+                fields.append("cost_usd=unknown")
+        print("\t".join(fields))
+        for result_path in (run_dir / "items").glob("*/result.yml"):
+            result = load_yaml(result_path)
+            if result.get("state") != "failed":
+                continue
+            message = result.get("error", {}).get("message")
+            if isinstance(message, str) and message:
+                failure_messages[message] += 1
+
+    if limit_items is not None and selected_total:
+        print(
+            f"Probe items: {completed_total}/{selected_total} completed; "
+            f"{failed_total} failed."
+        )
+    if states["failed"]:
+        print(f"{states['failed']} run(s) failed.", file=sys.stderr)
+        for message, count in failure_messages.most_common():
+            print(f"- {count} item(s): {message}", file=sys.stderr)
+        print(f"Inspect all evidence: tamesu status {eval_id}", file=sys.stderr)
+        return 1
+    if limit_items is not None:
+        print("Probe runs are diagnostic and excluded from formal comparisons.")
+        print(f"Next: tamesu run {eval_id}")
+        return 0
+    incomplete = sum(count for state, count in states.items() if state != "complete")
+    if incomplete:
+        print(f"{incomplete} run(s) remain incomplete.", file=sys.stderr)
+        print(f"Inspect all evidence: tamesu status {eval_id}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -296,6 +367,19 @@ def command_compare(project_root: Path, eval_id: str) -> int:
     rows = comparison_rows(plan)
     if not rows:
         print("No compatible completed runs to compare.")
+        summary = status_summary(plan)
+        counts = summary["counts"]
+        excluded = [
+            f"{counts[key]} {key}"
+            for key in ("partial", "failed", "stale")
+            if counts[key]
+        ]
+        if excluded:
+            print(f"Excluded evidence: {', '.join(excluded)}.")
+        if counts["owed"]:
+            print(f"Planned runs still owed: {counts['owed']}.")
+            print(f"Next: tamesu run {eval_id}")
+        print(f"Inspect: tamesu status {eval_id}")
         return 0
     print("model\tarm\trepetitions\titems\tprimary_mean\tstdev\tfailure_rate\tcost_usd")
     for row in rows:

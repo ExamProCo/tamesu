@@ -37,7 +37,7 @@ class MetaProvider:
         ]
         payload: dict[str, Any] = {
             "model": model,
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
             "messages": messages,
         }
         if structured_output == "json_schema":
@@ -78,11 +78,6 @@ class MetaProvider:
         choice = choices[0]
         message = choice.get("message")
         text = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(text, str) or not text.strip():
-            if choice.get("finish_reason") == "length":
-                raise ProviderError("meta model hit the token cap", retryable=False)
-            raise ProviderError("meta response did not contain output text")
-
         raw_usage = document.get("usage") if isinstance(document.get("usage"), dict) else {}
         prompt_details = raw_usage.get("prompt_tokens_details", {})
         cached = prompt_details.get("cached_tokens", 0) if isinstance(prompt_details, dict) else 0
@@ -90,10 +85,33 @@ class MetaProvider:
             raw_usage.get("prompt_tokens"), raw_usage.get("completion_tokens"), cached
         )
         request_id = document.get("id") or headers.get("x-request-id")
+        response_metadata = {
+            "model": document.get("model", model),
+            "finish_reason": choice.get("finish_reason"),
+        }
+        if not isinstance(text, str) or not text.strip():
+            if choice.get("finish_reason") == "length":
+                raise ProviderError(
+                    f"meta model hit max_completion_tokens ({max_tokens}); "
+                    "raise max_tokens or lower effort",
+                    retryable=False,
+                    request_id=str(request_id) if request_id else None,
+                    usage=usage,
+                    cost_usd=cost_for_usage(model, usage),
+                    response_metadata=response_metadata,
+                )
+            raise ProviderError(
+                "meta response did not contain output text",
+                request_id=str(request_id) if request_id else None,
+                usage=usage,
+                cost_usd=cost_for_usage(model, usage),
+                response_metadata=response_metadata,
+            )
+
         return ProviderResponse(
             text=text,
             request_id=str(request_id) if request_id else None,
             usage=usage,
             cost_usd=cost_for_usage(model, usage),
-            response_metadata={"model": document.get("model", model)},
+            response_metadata=response_metadata,
         )

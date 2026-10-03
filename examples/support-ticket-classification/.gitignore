@@ -1,0 +1,6 @@
+# Generated evaluation evidence for this disposable example project.
+.env
+.tamesu/
+**/evals/*/runs/
+**/evals/*/logs/
+**/evals/*/leaderboard.md

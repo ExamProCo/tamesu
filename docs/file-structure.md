@@ -32,6 +32,7 @@ tamesu/
 │       ├── cli.py
 │       ├── config.py
 │       ├── discovery.py
+│       ├── environment.py
 │       ├── planner.py
 │       ├── pricing.py
 │       ├── runner.py
@@ -81,8 +82,10 @@ and run contracts remain usable without importing Python code.
 | `plans/` | Design and implementation plans created before the framework code |
 
 Project configuration belongs at the repository root. Secrets do not: `.env.example`
-documents expected environment variables, while real credentials remain outside version
-control.
+documents expected environment variables, while real credentials remain ignored in
+project or enclosing Git-workspace `.env` or `.tamesu/.env` files, in
+`~/.tamesu/.env`, or in the process environment. See
+[Configuration](configuration.md).
 
 Each directory directly under `examples/` is an independent Tamesu project with its own
 `cases/` tree. Examples should use synthetic or redistributable data, stay small enough to

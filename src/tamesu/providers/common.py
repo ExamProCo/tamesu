@@ -20,7 +20,10 @@ def credential_error(provider: str) -> str | None:
     names = PROVIDER_KEYS[provider]
     if any(os.environ.get(name, "") for name in names):
         return None
-    return f"{' or '.join(names)} is not set"
+    return (
+        f"{' or '.join(names)} is not set in the effective environment "
+        "(process, project, workspace, global, or --config-dir)"
+    )
 
 
 def standard_parameters(model: str, parameters: dict[str, Any]) -> tuple[int, str | None, Any, Any, dict[str, Any]]:
