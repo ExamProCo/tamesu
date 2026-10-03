@@ -13,8 +13,7 @@ with a real-world question, isolates the factor being tested, freezes a measurem
 and preserves what happened as evidence in ordinary files.
 
 It is built to confront [the White Rabbit Problem](docs/white-rabbit-problem.md): an agent
-workload looks close enough to keep chasing while its feasibility, cost, and remaining
-distance become less clear with every iteration.
+workload can feel close enough to keep chasing while remaining too uncertain to plan.
 
 > **Status:** Tamesu 0.1 implements structured-text evals with deterministic scoring and
 > first-party adapters for OpenAI, Anthropic, Google Gemini, xAI/Grok, Meta, and Amazon
