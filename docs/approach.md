@@ -3,6 +3,10 @@
 An evaluation is not just a script that produces a score. It is a structured attempt to
 answer a question well enough to make a decision.
 
+This approach is Tamesu's response to [the White Rabbit Problem](white-rabbit-problem.md):
+the tendency for a promising agent prototype to consume increasing time and complexity
+without producing clearer evidence about feasibility.
+
 Tamesu therefore starts before model execution. Its workflow makes the reasoning behind
 an evaluation visible, freezes the intended measurement before the formal run, and keeps
 the resulting evidence connected to the question it was meant to answer.

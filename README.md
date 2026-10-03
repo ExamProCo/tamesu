@@ -12,6 +12,10 @@ Many evaluation workflows begin with a dataset, a task, or a list of models. Tam
 with a real-world question, isolates the factor being tested, freezes a measurement plan,
 and preserves what happened as evidence in ordinary files.
 
+It is built to confront [the White Rabbit Problem](docs/white-rabbit-problem.md): an agent
+workload looks close enough to keep chasing while its feasibility, cost, and remaining
+distance become less clear with every iteration.
+
 > **Status:** Tamesu 0.1 implements structured-text evals with deterministic scoring and
 > first-party adapters for OpenAI, Anthropic, Google Gemini, xAI/Grok, Meta, and Amazon
 > Nova through Bedrock. Image tasks, model judges, and human review remain planned.
@@ -66,6 +70,7 @@ Case → Experiment → Eval → Run
 
 ## Documentation
 
+- [The White Rabbit Problem](docs/white-rabbit-problem.md)
 - [The Tamesu approach: from question to evidence](docs/approach.md)
 - [Core concepts](docs/concepts.md)
 - [Where Tamesu fits in the evaluation landscape](docs/landscape.md)
