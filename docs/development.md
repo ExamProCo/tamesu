@@ -54,6 +54,7 @@ src/tamesu/
 ├── runner.py
 ├── identity.py
 ├── artifacts.py
+├── logging.py
 ├── scoring.py
 ├── reporting.py
 ├── models.py
@@ -84,7 +85,8 @@ src/tamesu/
 | `pricing.py` | Estimate expected cost and maximum priced exposure for a plan |
 | `runner.py` | Coordinate item execution, retries, budgets, resume, and terminal state |
 | `identity.py` | Canonicalize fingerprint inputs and calculate SHA-256 identities |
-| `artifacts.py` | Validate, checksum, quarantine, and atomically write artifacts |
+| `artifacts.py` | Checksum and atomically write YAML, JSON, text, and derived artifacts |
+| `logging.py` | Serialize, redact, synchronize, and durably append run events |
 | `scoring.py` | Run deterministic checks and aggregate item and run metrics |
 | `reporting.py` | Build reports, comparisons, and leaderboards from stored evidence |
 | `models.py` | Shared domain models and normalized result types |
@@ -236,8 +238,10 @@ YAML, JSON, and Markdown outputs should be written safely:
 3. Atomically rename it over the derived destination or into its new immutable path.
 4. `fsync` the directory when the platform supports it.
 
-Provider-attempt logs are append-only JSONL. Each line must be complete, independently
-parseable, and flushed immediately. Concurrent workers must not interleave writes.
+Run logs are append-only, schema-versioned JSONL. Each line is complete, independently
+parseable, flushed, and synced before the writer returns. An in-process lock prevents
+concurrent item workers from interleaving writes; running the same run from multiple
+processes is unsupported.
 
 Before logging, recursively redact:
 
@@ -247,8 +251,12 @@ Before logging, recursively redact:
 - credential-bearing URLs;
 - provider response fields known to contain secrets.
 
-Large or binary data belongs in artifact files, not YAML or JSONL. Store a relative path,
-media type, byte size, and checksum instead.
+Provider attempts store prompt, schema, and parameter hashes rather than raw request
+bodies. Persisted outputs receive separate artifact events with paths, media types, and
+checksums. Large or binary data belongs in artifact files, not YAML or JSONL.
+
+The exact event schema and security boundary are documented in
+[Logging and execution evidence](logging.md).
 
 ## Execution and resume
 
@@ -286,7 +294,7 @@ Cover pure and isolated behavior:
 - run classification as banked, partial, stale, failed, or extra;
 - retry classification;
 - cost aggregation and budget boundaries;
-- secret redaction;
+- recursive secret and signed-URL redaction;
 - metric denominators and aggregation.
 
 ### Contract tests
@@ -299,7 +307,7 @@ Every provider adapter should run against recorded or fake responses that exerci
 - malformed or incomplete responses;
 - usage and cost normalization;
 - request ID preservation;
-- secret removal from logs.
+- secret removal from logs and persisted response metadata.
 
 Task adapters should have fixtures for valid outputs, corrupt outputs, schema violations,
 missing assets, and task-specific edge cases.

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -46,18 +45,3 @@ def write_yaml(path: Path, value: Any) -> None:
         path,
         yaml.safe_dump(value, sort_keys=False, allow_unicode=True, default_flow_style=False),
     )
-
-
-class JsonlWriter:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
-
-    def append(self, value: dict[str, Any]) -> None:
-        line = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-        with self._lock:
-            with self.path.open("a", encoding="utf-8", newline="\n") as stream:
-                stream.write(line + "\n")
-                stream.flush()
-                os.fsync(stream.fileno())

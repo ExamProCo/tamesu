@@ -17,6 +17,7 @@ Every file is designed to remain readable without the Tamesu CLI.
 | `result.yml` | Tamesu | Records the outcome for one dataset item |
 | `report.yml` | Tamesu | Summarizes scores and execution results |
 | `judge.yml` | Tamesu or reviewer | Preserves a structured judgment for one item |
+| `logs/<run-id>.jsonl` | Tamesu | Append-only, versioned run timeline |
 
 The first three files are authored plans. The remaining files are evidence or derived
 reports and must not be hand-edited to make an eval appear complete.
@@ -468,9 +469,9 @@ totals:
   cost_usd: 0.16
 ```
 
-The complete record also includes the hash inventory, source revision and dirty state,
-framework and runtime versions, dependency versions, provider SDK version, and terminal
-state reason when applicable.
+The complete record also includes the content hash inventory, Tamesu version, Python
+version, platform, executable path, concurrency, budget, prompt source paths, and resolved
+parameters.
 
 Run states are `planned`, `running`, `partial`, `failed`, or `complete`. Only a complete
 run with matching fingerprints can satisfy a planned repetition.
@@ -508,6 +509,17 @@ mechanical_scores:
 Failed results use the same identity and attempt fields and include a normalized error
 with a type, safe message, retryability, and provider request ID when one exists. They are
 retained in aggregate denominators.
+
+## `logs/<run-id>.jsonl`
+
+Each run has a schema-versioned, append-only event stream containing lifecycle events,
+provider attempts, artifact references, terminal item records, and framework failures.
+The complete event contract, durability behavior, ordering rules, and redaction boundary
+are defined in [Logging and execution evidence](logging.md) and the
+[log-event JSON Schema](../schemas/log-event.schema.json).
+
+The log is execution evidence, but it does not replace `run.yml`, `result.yml`, stored
+outputs, or `report.yml`. Provider request bodies and raw prompts are not written to it.
 
 ## `judge.yml`
 

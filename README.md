@@ -10,6 +10,22 @@ requiring a database or hosted service.
 > first-party adapters for OpenAI, Anthropic, Google Gemini, xAI/Grok, Meta, and Amazon
 > Nova through Bedrock. Image tasks, model judges, and human review remain planned.
 
+## Why I built Tamesu
+
+I built Tamesu after finding that many evaluation frameworks were difficult to learn,
+required hosted services or databases, and hid important behavior behind large abstraction
+layers. Tamesu is designed around a few deliberate choices:
+
+- **Files instead of infrastructure.** Plans, outputs, scores, costs, and provenance live
+  in ordinary files that can be inspected, diffed, and versioned without a database or
+  hosted control plane.
+- **A small, hackable codebase.** The implementation should remain understandable enough
+  to modify for a particular experiment without first learning an extensive framework.
+- **Rich execution logging.** Every run produces a durable, append-only event stream for
+  provider attempts, retries, failures, artifacts, usage, and cost.
+- **Low-level provider APIs.** Adapters use direct HTTP interfaces and preserve provider
+  behavior instead of depending on a deep SDK or orchestration stack.
+
 ## Install
 
 Tamesu requires Python 3.12 or newer:
@@ -40,6 +56,7 @@ Case → Experiment → Eval → Run
 - [Manifest reference](docs/manifests.md)
 - [Command-line interface](docs/cli.md)
 - [Providers and models](docs/providers.md)
+- [Logging and execution evidence](docs/logging.md)
 - [Contributor development guide](docs/development.md)
 
 ## Example

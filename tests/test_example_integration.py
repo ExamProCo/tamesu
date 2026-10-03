@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from unittest.mock import patch
 
 from tamesu.cli import command_close
 from tamesu.config import load_eval_context, load_yaml
-from tamesu.errors import ProviderError
+from tamesu.errors import ExecutionError, ProviderError
 from tamesu.models import ProviderResponse
 from tamesu.planner import build_plan
 from tamesu.reporting import build_leaderboard, comparison_rows, status_summary
@@ -26,6 +27,8 @@ class FixtureProvider:
     def __init__(self) -> None:
         self.calls = 0
         self.failures_remaining = 0
+        self.unexpected_failures_remaining = 0
+        self.response_metadata: dict[str, object] = {}
 
     def credential_error(self) -> None:
         return None
@@ -35,12 +38,16 @@ class FixtureProvider:
         if self.failures_remaining:
             self.failures_remaining -= 1
             raise ProviderError("temporary fixture failure", retryable=True)
+        if self.unexpected_failures_remaining:
+            self.unexpected_failures_remaining -= 1
+            raise RuntimeError(f"unexpected fixture failure {os.environ.get('OPENAI_API_KEY', '')}")
         answer = classify(str(kwargs["user_prompt"]))
         return ProviderResponse(
             text=json.dumps(answer),
             request_id=f"fixture-{self.calls}",
             usage={"input_tokens": 20, "output_tokens": 12, "total_tokens": 32},
             cost_usd=0.001,
+            response_metadata=self.response_metadata,
         )
 
 
@@ -184,3 +191,73 @@ class ExampleIntegrationTests(unittest.TestCase):
         result_paths = list((first_run_dir / "items").glob("*/result.yml"))
         self.assertEqual(len(result_paths), 1)
         self.assertEqual(load_yaml(result_paths[0])["attempts"], 2)
+
+        log_path = context.eval_dir / "logs" / f"{run_ids[0]}.jsonl"
+        events = [
+            json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
+        ]
+        attempts = [event for event in events if event["event"] == "provider_attempt"]
+        self.assertEqual([event["attempt"] for event in attempts], [1, 2])
+        self.assertEqual([event["ok"] for event in attempts], [False, True])
+        self.assertEqual(attempts[0]["usage"], {})
+        self.assertIsNone(attempts[0]["cost_usd"])
+        starts = [event for event in events if event["event"] == "run_started"]
+        self.assertEqual([event["resumed"] for event in starts], [False, True])
+        self.assertTrue(any(event["event"] == "artifacts_written" for event in events))
+
+    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-fixture-secret"})
+    def test_logs_and_results_redact_secrets(self) -> None:
+        context = load_eval_context(self.project, EVAL_ID)
+        self.provider.response_metadata = {
+            "authorization": "Bearer sk-fixture-secret",
+            "debug": "key=sk-fixture-secret",
+        }
+        run_ids = run_eval(context, only="gpt-5.4-mini", limit_items=1)
+        run_id = run_ids[0]
+        log_text = (context.eval_dir / "logs" / f"{run_id}.jsonl").read_text(
+            encoding="utf-8"
+        )
+        result_text = next(
+            (context.eval_dir / "runs" / run_id / "items").glob("*/result.yml")
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("sk-fixture-secret", log_text)
+        self.assertNotIn("sk-fixture-secret", result_text)
+        self.assertIn("[REDACTED]", log_text)
+        self.assertIn("[REDACTED]", result_text)
+
+    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-unexpected-secret"})
+    def test_unexpected_provider_exception_is_logged_and_terminal(self) -> None:
+        context = load_eval_context(self.project, EVAL_ID)
+        self.provider.unexpected_failures_remaining = 1
+        run_ids = run_eval(context, only="gpt-5.4-mini", limit_items=1)
+        run_id = run_ids[0]
+        run_dir = context.eval_dir / "runs" / run_id
+        manifest = load_yaml(run_dir / "run.yml")
+        result_path = next((run_dir / "items").glob("*/result.yml"))
+        result = load_yaml(result_path)
+        log_text = (context.eval_dir / "logs" / f"{run_id}.jsonl").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(manifest["state"], "failed")
+        self.assertEqual(result["state"], "failed")
+        self.assertIn("unexpected RuntimeError", result["error"]["message"])
+        self.assertNotIn("sk-unexpected-secret", log_text)
+        self.assertNotIn("sk-unexpected-secret", result_path.read_text(encoding="utf-8"))
+
+    def test_finalization_failure_leaves_resumable_logged_run(self) -> None:
+        context = load_eval_context(self.project, EVAL_ID)
+        with patch("tamesu.runner.build_report", side_effect=RuntimeError("report failed")):
+            with self.assertRaisesRegex(ExecutionError, "Could not finalize run"):
+                run_eval(context, only="gpt-5.4-mini", limit_items=1)
+
+        run_dirs = list((context.eval_dir / "runs").iterdir())
+        self.assertEqual(len(run_dirs), 1)
+        manifest = load_yaml(run_dirs[0] / "run.yml")
+        self.assertEqual(manifest["state"], "partial")
+        log_path = context.eval_dir / "logs" / f"{run_dirs[0].name}.jsonl"
+        events = [
+            json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(events[-2]["event"], "framework_error")
+        self.assertEqual(events[-1]["event"], "run_finished")
+        self.assertEqual(events[-1]["state"], "partial")

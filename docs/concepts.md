@@ -104,6 +104,10 @@ A run preserves enough evidence to explain and reproduce the execution:
 Runs are immutable evidence. Re-running an eval creates a new run, while rescoring reads
 the stored outputs and produces a new derived report without regenerating them.
 
+The run's append-only event stream explains provider attempts, retries, artifacts, and
+terminal transitions without copying raw prompts into the log. See
+[Logging and execution evidence](logging.md).
+
 ## From question to evidence
 
 Using the product-scanning example, the hierarchy looks like this:
@@ -155,8 +159,7 @@ uses two identities:
 - The **specification fingerprint** describes the intended measurement: the model,
   provider, arm, repetition, selected items, parameters, retry policy, and judge setup.
 - The **content fingerprint** describes the material and machinery used: datasets,
-  assets, rendered prompts, schemas, rubrics, evaluator code, framework version,
-  dependencies, and source revision.
+  prompt sources, schemas, structured-text scoring and task code, and framework version.
 
 A previous run satisfies an eval slot only when both fingerprints match. A run with the
 right label but a changed prompt, dataset, or evaluator is **stale** evidence for the

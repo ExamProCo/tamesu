@@ -25,6 +25,7 @@ tamesu/
 │   ├── case.schema.json
 │   ├── dataset.schema.json
 │   ├── eval.schema.json
+│   ├── log-event.schema.json
 │   └── report.schema.json
 ├── src/
 │   └── tamesu/
@@ -36,6 +37,7 @@ tamesu/
 │       ├── runner.py
 │       ├── identity.py
 │       ├── artifacts.py
+│       ├── logging.py
 │       ├── scoring.py
 │       ├── reporting.py
 │       ├── models.py
@@ -207,12 +209,15 @@ review, but is not a source of truth and can be rebuilt.
 
 ### `logs/`
 
-Each run receives an append-only JSONL call log. Every provider attempt is recorded as it
-happens, including normalized failures, retry information, duration, usage, cost, and
-artifact references.
+Each run receives an append-only, schema-versioned JSONL event stream. It records run
+start and finish, every provider attempt, persisted artifact references, terminal item
+records, and unexpected framework failures. Prompt and schema content is represented by
+hashes rather than copied into the log.
 
-Authorization headers, API keys, signed URLs, and configured secret fields must be
-redacted before logging.
+Events are flushed and synced immediately, and concurrent item workers share one locked
+writer. Sensitive keys, configured credential values, inline secrets, and signed URL
+parameters are recursively redacted. See [Logging and execution evidence](logging.md) for
+the event schema, durability boundary, and content policy.
 
 ### `runs/`
 
@@ -240,7 +245,7 @@ overwritten.
 - selected dataset item IDs;
 - specification and content fingerprints;
 - the hash inventory used to compute those fingerprints;
-- framework, provider SDK, runtime, dependency, and Git versions;
+- framework and Python runtime information;
 - aggregate usage, cost, retry, and duration totals.
 
 Score summaries belong in `report.yml`, not `run.yml`.
@@ -273,8 +278,8 @@ outputs, original call records, or immutable judgments.
 | Recorded evidence | `run.yml`, item outputs, `result.yml`, call logs, judgments | No; resume may append missing compatible work |
 | Derived output | `report.yml`, `leaderboard.md` | Yes, through an explicit rebuild or rescore |
 
-If a partial artifact fails validation, Tamesu moves it to a timestamped quarantine name
-with a recorded reason instead of deleting it silently.
+Partial and failed artifacts remain in place for inspection. Tamesu does not silently
+delete them.
 
 ## Path and naming rules
 

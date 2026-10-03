@@ -93,6 +93,7 @@ tamesu/
     case.schema.json
     dataset.schema.json
     eval.schema.json
+    log-event.schema.json
     report.schema.json
   tests/
     fixtures/
@@ -454,15 +455,16 @@ Generation outputs, requests, responses, and original judgments are immutable.
 
 ### JSONL call log
 
-Each provider attempt writes one line immediately and flushes it to disk:
+Each provider attempt writes a versioned event immediately and flushes it to disk:
 
 ```json
-{"run_id":"...","item_id":"canned-coffee-01","stage":"generate","attempt":1,"at":"...","provider":"openai","model":"gpt-image-2","ok":true,"duration_ms":18422,"request":{},"response_metadata":{},"usage":{},"cost_usd":0.08,"artifacts":[{"path":"runs/.../generated.png","sha256":"sha256:..."}]}
+{"schema_version":1,"event":"provider_attempt","run_id":"...","item_id":"duplicate-charge","stage":"generate","attempt":1,"at":"...","provider":"openai","model":"gpt-5.4-mini","ok":true,"duration_ms":842,"request":{"system_sha256":"sha256:...","user_sha256":"sha256:...","output_schema_sha256":"sha256:...","parameters_sha256":"sha256:..."},"provider_request_id":"resp_123","response_metadata":{"status":"completed"},"usage":{"input_tokens":110,"output_tokens":28},"cost_usd":0.000209}
 ```
 
 Failed calls use the same shape with `ok: false` and a normalized error containing type,
-message, retryability, and provider request ID. Logs must redact authorization headers,
-API keys, signed URLs, and other configured secret fields.
+message, retryability, and status code. Run lifecycle, artifact, item-terminal, and
+framework-error events use the same stream. Logs recursively redact authorization
+headers, API keys, credential values, inline secrets, and signed URL parameters.
 
 ## Execution lifecycle
 

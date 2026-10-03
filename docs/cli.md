@@ -216,8 +216,10 @@ owed by the eval.
 
 ### Interruption and budgets
 
-Every provider attempt is appended to the run's JSONL log. Completed item stages are
-preserved when execution is interrupted.
+Every provider attempt is appended to the run's JSONL event stream. Run lifecycle,
+artifact, item-terminal, retry, and framework-error events share the same stream.
+Completed item stages are preserved when execution is interrupted. See
+[Logging and execution evidence](logging.md) for the schema and redaction rules.
 
 The budget check is a preflight exposure check, not a live provider-side spending limit.
 Tamesu records actual cost after each response, but unknown pricing and provider billing
@@ -239,8 +241,9 @@ Status classifies discovered runs as:
 - **stale** — its specification or content fingerprint does not match the current plan;
 - **extra** — valid evidence exists beyond the repetitions currently owed.
 
-The command reports missing run slots, item failures, pending judgments, human-review
-requirements, and recorded cost. It does not modify artifacts or call providers.
+The command reports planned, banked, owed, partial, failed, stale, and extra run counts,
+followed by each discovered run's classification and state. It does not modify artifacts
+or call providers.
 
 ## `tamesu resume`
 
@@ -254,20 +257,16 @@ tamesu resume \
 Before reusing any artifact, `resume` verifies:
 
 - the specification and content fingerprints;
-- the run's resolved manifest;
-- input and output checksums;
-- current artifact validators;
-- required stages already recorded as complete.
+- provider, model, arm, repetition, and selected item identity;
+- that the eval remains active and the run remains partial;
+- current budget exposure and provider credentials.
 
-Only missing or safely retryable work is scheduled. Successful generation is not repeated
-merely because judging or reporting is incomplete.
+Items with a complete `result.yml` are reused. Items with retryable failures continue
+from their recorded attempt count; permanent failures cannot resume.
 
-Resume refuses a changed prompt, dataset, asset, schema, rubric, evaluator, parameter set,
-or dependency identity and explains the mismatch. Use a fresh `run` when the intended
-measurement has changed.
-
-Invalid partial artifacts are moved to a timestamped quarantine name with a reason rather
-than being silently deleted.
+Resume refuses changed specification or content identity and explains the mismatch. It
+does not currently quarantine or repair a corrupt complete item artifact; inspect the run
+and start fresh if its stored evidence is damaged.
 
 ## `tamesu rescore`
 
@@ -280,11 +279,9 @@ tamesu rescore \
 
 Rescoring:
 
-- reads existing generated or structured outputs;
+- reads existing structured-text outputs;
 - reruns configured mechanical checks;
-- applies the selected rubric and scorer version;
 - preserves original generation artifacts and call logs;
-- records new judgments separately from previous judgments;
 - atomically replaces the derived `report.yml` after success.
 
 Generation calls are forbidden during rescoring. If new model judgments would incur cost,
@@ -302,12 +299,8 @@ Comparison output includes:
 
 - complete repetitions and total evaluated items;
 - mean and dispersion for the primary metric;
-- secondary quality metrics;
 - generation failure rate;
-- latency, usage, and cost;
-- judge agreement and human preference where available;
-- paired wins, losses, and ties for matched ablation arms;
-- confidence intervals when the sample size supports them.
+- total recorded cost.
 
 Stale, partial, failed, and scratch runs are identified but excluded from primary
 comparisons. `compare` reads stored reports and never calls a provider.

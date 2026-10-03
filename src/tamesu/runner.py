@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .artifacts import JsonlWriter, write_json, write_text, write_yaml
+from .artifacts import write_json, write_text, write_yaml
 from .config import load_yaml
 from .discovery import find_run_dir
 from .errors import ExecutionError, ProviderError
-from .identity import digest_bytes, digest_file
+from .identity import digest_bytes, digest_file, digest_value
+from .logging import CallLogWriter
 from .models import EvalContext, RunSpec
 from .planner import build_plan, items_by_id, limit_spec
 from .providers import get_provider
@@ -74,7 +75,7 @@ def execute_spec(
     )
     run_dir = existing_run_dir or context.eval_dir / "runs" / run_id
     log_path = context.eval_dir / "logs" / f"{run_id}.jsonl"
-    log = JsonlWriter(log_path)
+    log = CallLogWriter(log_path)
     provider = get_provider(spec.provider)
     started_at = _utc_now()
 
@@ -93,6 +94,25 @@ def execute_spec(
         totals=previous_manifest.get("totals", {}),
     )
     write_yaml(run_dir / "run.yml", manifest)
+    try:
+        log.append(
+            "run_started",
+            at=_utc_now(),
+            run_id=run_id,
+            resumed=existing_run_dir is not None,
+            provider=spec.provider,
+            model=spec.model,
+            arm=spec.arm_id,
+            repetition=spec.repetition,
+            selected_items=len(spec.item_ids),
+        )
+    except Exception as exc:
+        manifest["state"] = "failed"
+        manifest["finished_at"] = _utc_now()
+        write_yaml(run_dir / "run.yml", manifest)
+        raise ExecutionError(
+            f"Could not initialize the call log for {run_id}: {log.safe_text(exc)}"
+        ) from exc
 
     item_map = items_by_id(context)
     selected = [(item_id, item_map[item_id]) for item_id in spec.item_ids]
@@ -113,10 +133,53 @@ def execute_spec(
                 for future in as_completed(futures):
                     results.append(future.result())
     except KeyboardInterrupt:
-        manifest["state"] = "partial"
-        manifest["finished_at"] = _utc_now()
+        totals = _totals(results)
+        manifest = _run_manifest(
+            context,
+            spec,
+            run_id=run_id,
+            state="partial",
+            started_at=started_at,
+            finished_at=_utc_now(),
+            totals=totals,
+        )
         write_yaml(run_dir / "run.yml", manifest)
+        log.append(
+            "run_finished",
+            at=_utc_now(),
+            run_id=run_id,
+            state="partial",
+            totals=totals,
+            interrupted=True,
+        )
         raise
+    except Exception as exc:
+        totals = _totals(results)
+        safe_message = log.safe_text(exc)
+        manifest = _run_manifest(
+            context,
+            spec,
+            run_id=run_id,
+            state="failed",
+            started_at=started_at,
+            finished_at=_utc_now(),
+            totals=totals,
+        )
+        write_yaml(run_dir / "run.yml", manifest)
+        log.append(
+            "framework_error",
+            at=_utc_now(),
+            run_id=run_id,
+            error={"type": type(exc).__name__, "message": safe_message},
+        )
+        log.append(
+            "run_finished",
+            at=_utc_now(),
+            run_id=run_id,
+            state="failed",
+            totals=totals,
+        )
+        raise ExecutionError(f"Run {run_id} failed: {safe_message}") from exc
 
     all_complete = len(results) == len(selected) and all(
         result.get("state") == "complete" for result in results
@@ -142,8 +205,51 @@ def execute_spec(
         finished_at=_utc_now(),
         totals=totals,
     )
-    write_yaml(run_dir / "run.yml", manifest)
-    build_report(context, run_dir, manifest)
+    try:
+        write_yaml(run_dir / "run.yml", manifest)
+        build_report(context, run_dir, manifest)
+        report_path = run_dir / "report.yml"
+        log.append(
+            "run_finished",
+            at=_utc_now(),
+            run_id=run_id,
+            state=state,
+            totals=totals,
+            report={
+                "path": report_path.relative_to(context.eval_dir).as_posix(),
+                "sha256": digest_file(report_path),
+            },
+        )
+    except Exception as exc:
+        safe_message = log.safe_text(exc)
+        fallback_state = "failed" if has_permanent_failure else "partial"
+        fallback = _run_manifest(
+            context,
+            spec,
+            run_id=run_id,
+            state=fallback_state,
+            started_at=started_at,
+            finished_at=_utc_now(),
+            totals=totals,
+        )
+        write_yaml(run_dir / "run.yml", fallback)
+        try:
+            log.append(
+                "framework_error",
+                at=_utc_now(),
+                run_id=run_id,
+                error={"type": type(exc).__name__, "message": safe_message},
+            )
+            log.append(
+                "run_finished",
+                at=_utc_now(),
+                run_id=run_id,
+                state=fallback_state,
+                totals=totals,
+            )
+        except Exception:
+            pass
+        raise ExecutionError(f"Could not finalize run {run_id}: {safe_message}") from exc
     return run_id
 
 
@@ -201,7 +307,7 @@ def _process_item(
     spec: RunSpec,
     run_id: str,
     run_dir: Path,
-    log: JsonlWriter,
+    log: CallLogWriter,
     provider: Any,
     item_id: str,
     item: dict[str, Any],
@@ -221,6 +327,7 @@ def _process_item(
     try:
         system_prompt, user_prompt = render_prompts(spec.prompts, item)
     except Exception as exc:
+        safe_message = log.safe_text(exc)
         result = {
             "schema_version": 1,
             "item_id": item_id,
@@ -228,12 +335,20 @@ def _process_item(
             "attempts": starting_attempts,
             "error": {
                 "type": type(exc).__name__,
-                "message": str(exc),
+                "message": safe_message,
                 "retryable": False,
             },
         }
         write_yaml(result_path, result)
+        _log_item_terminal(context, run_id, item_id, result_path, result, log)
         return result
+
+    prompt_metadata = {
+        "system_sha256": digest_bytes(system_prompt.encode("utf-8")),
+        "user_sha256": digest_bytes(user_prompt.encode("utf-8")),
+        "output_schema_sha256": digest_value(context.output_schema or {}),
+        "parameters_sha256": digest_value(spec.parameters),
+    }
 
     final_error: ProviderError | None = None
     response = None
@@ -254,48 +369,82 @@ def _process_item(
             )
             latency_ms = round((time.monotonic() - attempt_started) * 1000)
             log.append(
-                {
-                    "run_id": run_id,
-                    "item_id": item_id,
-                    "stage": "generate",
-                    "attempt": attempt,
-                    "at": _utc_now(),
-                    "provider": spec.provider,
-                    "model": spec.model,
-                    "ok": True,
-                    "duration_ms": latency_ms,
-                    "provider_request_id": response.request_id,
-                    "usage": response.usage,
-                    "cost_usd": response.cost_usd,
-                }
+                "provider_attempt",
+                run_id=run_id,
+                item_id=item_id,
+                stage="generate",
+                attempt=attempt,
+                at=_utc_now(),
+                provider=spec.provider,
+                model=spec.model,
+                ok=True,
+                duration_ms=latency_ms,
+                request=prompt_metadata,
+                provider_request_id=response.request_id,
+                response_metadata=response.response_metadata,
+                usage=response.usage,
+                cost_usd=response.cost_usd,
             )
             break
         except ProviderError as exc:
             latency_ms = round((time.monotonic() - attempt_started) * 1000)
-            final_error = exc
+            final_error = _safe_provider_error(exc, log)
             log.append(
-                {
-                    "run_id": run_id,
-                    "item_id": item_id,
-                    "stage": "generate",
-                    "attempt": attempt,
-                    "at": _utc_now(),
-                    "provider": spec.provider,
-                    "model": spec.model,
-                    "ok": False,
-                    "duration_ms": latency_ms,
-                    "error": {
-                        "type": type(exc).__name__,
-                        "message": str(exc),
-                        "retryable": exc.retryable,
-                        "status_code": exc.status_code,
-                        "provider_request_id": exc.request_id,
-                    },
-                }
+                "provider_attempt",
+                run_id=run_id,
+                item_id=item_id,
+                stage="generate",
+                attempt=attempt,
+                at=_utc_now(),
+                provider=spec.provider,
+                model=spec.model,
+                ok=False,
+                duration_ms=latency_ms,
+                request=prompt_metadata,
+                provider_request_id=exc.request_id,
+                response_metadata={},
+                usage={},
+                cost_usd=None,
+                error={
+                    "type": type(exc).__name__,
+                    "message": str(final_error),
+                    "retryable": exc.retryable,
+                    "status_code": exc.status_code,
+                },
             )
             if not exc.retryable or attempt_offset >= spec.retries:
                 break
             time.sleep(min(2**attempt_offset, 5))
+        except Exception as exc:
+            latency_ms = round((time.monotonic() - attempt_started) * 1000)
+            final_error = ProviderError(
+                f"unexpected {type(exc).__name__}: {log.safe_text(exc)}",
+                retryable=False,
+            )
+            log.append(
+                "provider_attempt",
+                run_id=run_id,
+                item_id=item_id,
+                stage="generate",
+                attempt=attempt,
+                at=_utc_now(),
+                provider=spec.provider,
+                model=spec.model,
+                ok=False,
+                duration_ms=latency_ms,
+                request=prompt_metadata,
+                provider_request_id=None,
+                response_metadata={},
+                usage={},
+                cost_usd=None,
+                error={
+                    "type": type(exc).__name__,
+                    "message": str(final_error),
+                    "retryable": False,
+                    "status_code": None,
+                },
+            )
+            break
 
     if response is None:
         assert final_error is not None
@@ -311,8 +460,8 @@ def _process_item(
                 "cost_usd": None,
             },
             "prompt": {
-                "system_sha256": digest_bytes(system_prompt.encode("utf-8")),
-                "user_sha256": digest_bytes(user_prompt.encode("utf-8")),
+                "system_sha256": prompt_metadata["system_sha256"],
+                "user_sha256": prompt_metadata["user_sha256"],
             },
             "error": {
                 "type": type(final_error).__name__,
@@ -323,6 +472,7 @@ def _process_item(
             },
         }
         write_yaml(result_path, result)
+        _log_item_terminal(context, run_id, item_id, result_path, result, log)
         return result
 
     raw_path = item_dir / "output.txt"
@@ -339,6 +489,33 @@ def _process_item(
         write_json(output_path, parsed)
         media_type = "application/json"
 
+    artifacts = [
+        {
+            "role": "raw_provider_output",
+            "path": raw_path.relative_to(context.eval_dir).as_posix(),
+            "sha256": digest_file(raw_path),
+            "media_type": "text/plain",
+        }
+    ]
+    if output_path != raw_path:
+        artifacts.append(
+            {
+                "role": "task_output",
+                "path": output_path.relative_to(context.eval_dir).as_posix(),
+                "sha256": digest_file(output_path),
+                "media_type": media_type,
+            }
+        )
+    else:
+        artifacts[0]["role"] = "task_output"
+    log.append(
+        "artifacts_written",
+        at=_utc_now(),
+        run_id=run_id,
+        item_id=item_id,
+        artifacts=artifacts,
+    )
+
     result = {
         "schema_version": 1,
         "item_id": item_id,
@@ -354,16 +531,49 @@ def _process_item(
             "latency_ms": latency_ms,
             "usage": response.usage,
             "cost_usd": response.cost_usd,
-            "response_metadata": response.response_metadata,
+            "response_metadata": log.redact(response.response_metadata),
         },
         "prompt": {
-            "system_sha256": digest_bytes(system_prompt.encode("utf-8")),
-            "user_sha256": digest_bytes(user_prompt.encode("utf-8")),
+            "system_sha256": prompt_metadata["system_sha256"],
+            "user_sha256": prompt_metadata["user_sha256"],
         },
         "mechanical_scores": scores,
     }
     write_yaml(result_path, result)
+    _log_item_terminal(context, run_id, item_id, result_path, result, log)
     return result
+
+
+def _safe_provider_error(error: ProviderError, log: CallLogWriter) -> ProviderError:
+    return ProviderError(
+        log.safe_text(error),
+        retryable=error.retryable,
+        status_code=error.status_code,
+        request_id=error.request_id,
+    )
+
+
+def _log_item_terminal(
+    context: EvalContext,
+    run_id: str,
+    item_id: str,
+    result_path: Path,
+    result: dict[str, Any],
+    log: CallLogWriter,
+) -> None:
+    log.append(
+        "item_finished",
+        at=_utc_now(),
+        run_id=run_id,
+        item_id=item_id,
+        state=result.get("state"),
+        attempts=result.get("attempts", 0),
+        result={
+            "path": result_path.relative_to(context.eval_dir).as_posix(),
+            "sha256": digest_file(result_path),
+        },
+        error=result.get("error"),
+    )
 
 
 def _run_manifest(

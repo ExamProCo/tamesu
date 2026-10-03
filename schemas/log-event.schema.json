@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tamesu.dev/schemas/log-event.schema.json",
+  "title": "Tamesu run log event",
+  "type": "object",
+  "required": ["schema_version", "event", "at", "run_id"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "event": {"type": "string", "minLength": 1},
+    "at": {"type": "string", "format": "date-time"},
+    "run_id": {"type": "string", "minLength": 1},
+    "item_id": {"type": "string", "minLength": 1},
+    "stage": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "provider": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "ok": {"type": "boolean"},
+    "duration_ms": {"type": "integer", "minimum": 0},
+    "provider_request_id": {"type": ["string", "null"]},
+    "request": {"type": "object"},
+    "response_metadata": {"type": "object"},
+    "usage": {"type": "object"},
+    "cost_usd": {"type": ["number", "null"], "minimum": 0},
+    "error": {"type": ["object", "null"]},
+    "artifacts": {"type": "array", "items": {"type": "object"}},
+    "state": {"type": "string"},
+    "totals": {"type": "object"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"event": {"const": "run_started"}}},
+      "then": {
+        "required": ["resumed", "provider", "model", "arm", "repetition", "selected_items"]
+      }
+    },
+    {
+      "if": {"properties": {"event": {"const": "provider_attempt"}}},
+      "then": {
+        "required": [
+          "item_id",
+          "stage",
+          "attempt",
+          "provider",
+          "model",
+          "ok",
+          "duration_ms",
+          "request",
+          "provider_request_id",
+          "response_metadata",
+          "usage",
+          "cost_usd"
+        ]
+      }
+    },
+    {
+      "if": {"properties": {"event": {"const": "artifacts_written"}}},
+      "then": {"required": ["item_id", "artifacts"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "item_finished"}}},
+      "then": {"required": ["item_id", "state", "attempts", "result"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "framework_error"}}},
+      "then": {"required": ["error"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "run_finished"}}},
+      "then": {"required": ["state", "totals"]}
+    }
+  ]
+}

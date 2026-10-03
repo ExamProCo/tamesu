@@ -331,6 +331,7 @@ For each probed item, check that:
 - `output.json` is valid and matches the declared schema;
 - `result.yml` records the checksum, attempts, latency, usage, cost, and scores;
 - the JSONL log contains one entry per provider attempt;
+- lifecycle, artifact, and item-terminal events surround those attempt entries;
 - no credential appears in any stored file;
 - a wrong classification is recorded as a model outcome, not a transport error.
 
@@ -446,5 +447,6 @@ of the experiment:
 6. Run `lint` and `plan` after every contract change.
 
 Use the [Manifest reference](manifests.md) for field details and the
-[CLI reference](cli.md) for full command behavior. Framework contributors should use the
-[Contributor development guide](development.md).
+[CLI reference](cli.md) for full command behavior. Use
+[Logging and execution evidence](logging.md) to interpret a run timeline. Framework
+contributors should use the [Contributor development guide](development.md).
