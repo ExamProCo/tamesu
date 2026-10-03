@@ -1,0 +1,7 @@
+schema_version: 1
+name: support-ticket-triage
+title: Support Ticket Triage
+description: >
+  Classify synthetic customer-support messages by category and priority, and decide
+  whether each ticket requires a human agent.
+default_task: structured_text

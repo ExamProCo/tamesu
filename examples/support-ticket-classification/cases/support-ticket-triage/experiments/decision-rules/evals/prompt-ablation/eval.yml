@@ -1,0 +1,57 @@
+schema_version: 1
+name: prompt-ablation
+status: draft
+question: >
+  Do explicit routing rules improve exact-match support-ticket classification accuracy?
+description: >
+  Compare a minimal classification prompt with an explicit decision-rules prompt. The
+  model, dataset, output schema, parameters, repetitions, and scoring remain fixed.
+
+task: structured_text
+dataset: ../../../../datasets/support-tickets-v1/dataset.yml
+output_schema: ../../schemas/ticket-classification.schema.json
+
+defaults:
+  repetitions: 2
+  concurrency: 2
+  timeout_seconds: 60
+  retries: 1
+  budget_usd: 2.00
+  parameters:
+    max_tokens: 256
+
+arms:
+  - id: basic-prompt
+    description: Lists the fields and allowed values without decision rules.
+    prompts:
+      system: ../../prompts/basic-system.md
+      user: ../../prompts/user.md.j2
+
+  - id: decision-rules
+    description: Defines category, priority, escalation, and precedence rules.
+    prompts:
+      system: ../../prompts/decision-rules-system.md
+      user: ../../prompts/user.md.j2
+
+runs:
+  - model: gpt-5.4-mini
+    provider: openai
+    arms:
+      - basic-prompt
+      - decision-rules
+
+evaluation:
+  mechanical:
+    - valid_json
+    - schema_valid
+    - exact_match
+
+metrics:
+  primary: exact_match_rate
+  secondary:
+    - category_accuracy
+    - priority_accuracy
+    - requires_human_accuracy
+    - invalid_output_rate
+    - median_latency_ms
+    - mean_cost_usd

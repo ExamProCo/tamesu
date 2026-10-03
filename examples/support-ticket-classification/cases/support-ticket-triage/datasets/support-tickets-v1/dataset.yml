@@ -1,0 +1,81 @@
+schema_version: 1
+name: support-tickets-v1
+description: Eight synthetic support tickets with deterministic routing labels.
+
+items:
+  - id: duplicate-charge
+    input:
+      message: >
+        I was charged twice for my monthly subscription. Please refund the duplicate
+        charge.
+    expected:
+      category: billing
+      priority: high
+      requires_human: true
+
+  - id: password-reset
+    input:
+      message: >
+        I forgot my password and the reset email has not arrived yet. How can I get back
+        into my account?
+    expected:
+      category: account-access
+      priority: normal
+      requires_human: false
+
+  - id: suspected-takeover
+    input:
+      message: >
+        Someone changed the email address on my account and I can no longer sign in. I
+        think my account has been stolen.
+    expected:
+      category: account-access
+      priority: urgent
+      requires_human: true
+
+  - id: csv-export
+    input:
+      message: >
+        The CSV export finishes, but accented customer names are garbled when I open the
+        file.
+    expected:
+      category: technical
+      priority: normal
+      requires_human: false
+
+  - id: cancellation-request
+    input:
+      message: >
+        Please cancel my subscription before it renews next week. I do not want another
+        charge.
+    expected:
+      category: cancellation
+      priority: normal
+      requires_human: true
+
+  - id: application-crash
+    input:
+      message: >
+        The application crashes every time I open a project, so I cannot do any work.
+    expected:
+      category: technical
+      priority: high
+      requires_human: false
+
+  - id: pricing-question
+    input:
+      message: >
+        Do you offer an annual discount, and where can I compare the available plans?
+    expected:
+      category: billing
+      priority: low
+      requires_human: false
+
+  - id: human-request
+    input:
+      message: >
+        I read the help article but still have questions. Please have a person contact me.
+    expected:
+      category: other
+      priority: normal
+      requires_human: true

@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tamesu.dev/schemas/eval.schema.json",
+  "title": "Tamesu eval manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "status",
+    "question",
+    "description",
+    "dataset",
+    "defaults",
+    "arms",
+    "runs",
+    "evaluation",
+    "metrics"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "status": {"enum": ["draft", "active", "complete"]},
+    "question": {"type": "string", "minLength": 1},
+    "description": {"type": "string", "minLength": 1},
+    "task": {"type": "string", "minLength": 1},
+    "dataset": {"type": "string", "minLength": 1},
+    "output_schema": {"type": "string", "minLength": 1},
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repetitions", "concurrency", "timeout_seconds", "retries", "budget_usd"],
+      "properties": {
+        "repetitions": {"type": "integer", "minimum": 1},
+        "concurrency": {"type": "integer", "minimum": 1},
+        "timeout_seconds": {"type": "integer", "minimum": 1},
+        "retries": {"type": "integer", "minimum": 0},
+        "budget_usd": {"type": "number", "minimum": 0},
+        "parameters": {"type": "object"}
+      }
+    },
+    "arms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+          "description": {"type": "string", "minLength": 1},
+          "prompts": {
+            "type": "object",
+            "additionalProperties": {"type": "string", "minLength": 1}
+          },
+          "references": {"type": "array", "items": {"type": "string"}},
+          "parameters": {"type": "object"}
+        }
+      }
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["model", "provider", "arms"],
+        "properties": {
+          "model": {"type": "string", "minLength": 1},
+          "provider": {"type": "string", "minLength": 1},
+          "arms": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "parameters": {"type": "object"},
+          "repetitions": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "required": ["mechanical"],
+      "properties": {
+        "mechanical": {"type": "array", "items": {"type": "string"}},
+        "model_judges": {"type": "array"},
+        "human_review": {"type": "object"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary"],
+      "properties": {
+        "primary": {"type": "string", "minLength": 1},
+        "secondary": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ticket-classification.schema.json",
+  "title": "Ticket classification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["category", "priority", "requires_human"],
+  "properties": {
+    "category": {
+      "type": "string",
+      "enum": ["billing", "account-access", "technical", "cancellation", "other"]
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["low", "normal", "high", "urgent"]
+    },
+    "requires_human": {
+      "type": "boolean"
+    }
+  }
+}
