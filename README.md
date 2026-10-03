@@ -1,6 +1,6 @@
 # Tamesu
 
-![./docs/logo-new.png](./docs/logo.png)
+![./docs/logo-new.png](./docs/logo-new.png)
 
 Tamesu is a file-based evaluation framework for reproducible AI experiments. It keeps
 evaluation plans, run artifacts, scores, costs, and provenance inspectable on disk—without
