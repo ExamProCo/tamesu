@@ -292,6 +292,10 @@ Status controls execution:
 All statuses allow read-only linting, planning, status, comparison, and reporting. Reopening
 a complete eval requires an explicit version-controlled edit.
 
+Use `tamesu activate <case>/<experiment>/<eval>` to validate and move a draft eval to
+active without calling a provider. Use `tamesu close` to verify its evidence, move an
+active eval to complete, and rebuild its leaderboard.
+
 ### `defaults`
 
 | Field | Type | Required | Constraint |

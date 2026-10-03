@@ -14,7 +14,7 @@ calculated deterministically.
 By the end, you will know how to:
 
 - inspect a Tamesu project;
-- validate and plan an eval;
+- validate, plan, and activate an eval;
 - run a small probe before the full evaluation;
 - inspect and resume stored work;
 - compare two experimental arms;
@@ -189,7 +189,7 @@ cases/support-ticket-triage/experiments/decision-rules/evals/prompt-ablation/eva
 The important sections are:
 
 ```yaml
-status: active
+status: draft
 task: structured_text
 dataset: ../../../../datasets/support-tickets-v1/dataset.yml
 output_schema: ../../schemas/ticket-classification.schema.json
@@ -243,12 +243,12 @@ tamesu list
 Expected output:
 
 ```text
-support-ticket-triage/decision-rules/prompt-ablation  active
+support-ticket-triage/decision-rules/prompt-ablation  draft
 ```
 
 The first column is the eval ID accepted by later commands. The second is the eval's
-workflow status. `active` means paid execution is allowed; it does not mean any runs have
-completed.
+workflow status. `draft` means the contract can be inspected but paid execution is still
+blocked.
 
 Now lint the full case:
 
@@ -294,11 +294,11 @@ Expand the plan:
 tamesu plan "$EVAL_ID"
 ```
 
-On a fresh example with credentials configured, expect output shaped like:
+On a fresh example before activation, expect output shaped like:
 
 ```text
 Eval: support-ticket-triage/decision-rules/prompt-ablation
-Status: active
+Status: draft
 Models: muse-spark-1.2
 Arms: basic-prompt, decision-rules
 Planned runs: 4
@@ -310,7 +310,10 @@ Budget ceiling: $2.00
 Recorded known cost: $0.000000
 Estimated cost: $0.017782
 Maximum additional exposure: $0.304832
-Execution blockers: none
+Execution blockers:
+- meta: META_API_KEY is not set in the effective environment
+  (process, project, workspace, global, or --config-dir)
+- eval status is 'draft'
 ```
 
 Read this as a preflight decision:
@@ -321,7 +324,11 @@ Read this as a preflight decision:
 - `Generation calls still owed: 32` is the paid work remaining before retries.
 - `Estimated cost` is a likely amount, while `Maximum additional exposure` assumes every
   call reaches its configured output cap and uses every allowed retry.
-- `Execution blockers: none` means execution is allowed. It does not start execution.
+- The blocker list explains why execution is not yet allowed. At this point both the
+  credential and draft status are expected.
+
+If Tamesu inherited a valid key from another configuration layer, the credential blocker
+will already be absent; the draft-status blocker should still be present.
 
 If prior evidence exists, recorded cost and run counts will differ. The important go/no-go
 checks are that the expanded work matches your intention, maximum exposure fits the
@@ -355,10 +362,11 @@ After setting the key, run the plan again:
 tamesu plan "$EVAL_ID"
 ```
 
-The final line should be `Execution blockers: none`. If it instead names
-`META_API_KEY`, Tamesu has not found the credential in the effective configuration. Stop
-there and use the [configuration troubleshooting steps](configuration.md#troubleshooting);
-do not diagnose credentials by repeatedly running paid commands.
+The credential blocker should disappear, leaving only `eval status is 'draft'`. If the
+plan still names `META_API_KEY`, Tamesu has not found the credential in the effective
+configuration. Stop there and use the
+[configuration troubleshooting steps](configuration.md#troubleshooting); do not diagnose
+credentials by repeatedly running paid commands.
 
 Muse Spark spends output tokens on private reasoning before producing visible JSON. The
 example uses `effort: minimal` and leaves enough output budget for both stages; a cap that
@@ -368,28 +376,28 @@ If you want another provider, change `provider` and `model` together to a pair s
 by an implemented adapter. Lint and plan again after the edit because the provider and
 model contribute to run identity and cost.
 
-## 9. Verify activation
+## 9. Activate the eval
 
-The bundled example is already `active`. If you copied it while it was still a draft,
-change:
-
-```yaml
-status: draft
-```
-
-to:
-
-```yaml
-status: active
-```
-
-Review and commit that change. Activation freezes the measurement plan and permits paid
-execution; it does not imply that any run has succeeded.
-
-Run the safety checks once more:
+After reviewing the manifest, lint result, expanded work, and cost exposure, activate the
+draft:
 
 ```sh
-tamesu lint cases/support-ticket-triage
+tamesu activate "$EVAL_ID"
+```
+
+Expected output:
+
+```text
+Activated support-ticket-triage/decision-rules/prompt-ablation.
+```
+
+Activation validates the full contract and atomically changes `status: draft` to
+`status: active`. It does not contact Meta or incur cost. Review and commit that manifest
+change if the project keeps eval plans in version control.
+
+Preview once more:
+
+```sh
 tamesu plan "$EVAL_ID"
 ```
 

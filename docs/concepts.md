@@ -1,5 +1,8 @@
 # Core concepts
 
+This page defines Tamesu's repository and execution model. If you are deciding how to
+frame an evaluation, begin with [The Tamesu approach](approach.md).
+
 Tamesu treats an evaluation as a versioned plan backed by inspectable evidence. The
 filesystem is the source of truth: manifests describe what should happen, while run
 artifacts show what actually happened.

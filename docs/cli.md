@@ -6,7 +6,7 @@
 Tamesu's command-line interface is designed around a small workflow:
 
 ```text
-lint → plan → run → status → rescore → compare → close
+lint → plan → activate → run → status → rescore → compare → close
 ```
 
 The examples use `tamesu` as the executable name. Commands operate on files in the
@@ -20,6 +20,7 @@ current repository and keep all evaluation evidence inspectable on disk.
 | `list` | Show discovered cases, experiments, and evals | No | No |
 | `models` | Show the built-in provider/model registry and pricing | No | No |
 | `plan` | Expand an eval and report work, cost, and blockers | No | No |
+| `activate` | Validate and move a draft eval to active | Yes | No |
 | `run` | Execute planned run configurations | Yes | Yes |
 | `status` | Reconcile the plan with evidence on disk | No | No |
 | `resume` | Continue a compatible partial run | Yes | Yes |
@@ -160,6 +161,22 @@ and three repetitions produce 12 planned runs. If the dataset contains 10 items,
 runs contain 120 generation work units.
 
 `plan` is always read-only. It never calls a generation provider or model judge.
+
+## `tamesu activate`
+
+Validate a draft eval and approve it for execution:
+
+```sh
+tamesu activate support-ticket-triage/decision-rules/prompt-ablation
+```
+
+Activation loads the complete eval contract and renders every selected prompt before
+atomically changing `status: draft` to `status: active`. It does not require provider
+credentials and never calls a provider.
+
+Running `activate` on an active eval succeeds without changing it. A complete eval cannot
+be activated; create a new eval or make an explicit, reviewed manifest edit if reopening
+is intentional.
 
 ## `tamesu run`
 
@@ -372,7 +389,14 @@ tamesu lint cases/support-ticket-triage
 tamesu plan support-ticket-triage/decision-rules/prompt-ablation
 ```
 
-After reviewing the plan and changing `status: draft` to `status: active`, execute it:
+After reviewing the plan, activate and preview it once more:
+
+```sh
+tamesu activate support-ticket-triage/decision-rules/prompt-ablation
+tamesu plan support-ticket-triage/decision-rules/prompt-ablation
+```
+
+Then execute it:
 
 ```sh
 tamesu run support-ticket-triage/decision-rules/prompt-ablation
@@ -402,8 +426,8 @@ The CLI is intended to work in local shells and continuous integration:
 - human-readable output goes to standard output;
 - errors and actionable diagnostics go to standard error;
 - files are written atomically except append-only call logs;
-- paid work is never triggered by `lint`, `list`, `plan`, `status`, `compare`,
-  `leaderboard`, or `close`;
+- paid work is never triggered by `lint`, `list`, `models`, `plan`, `activate`, `status`,
+  `compare`, `leaderboard`, or `close`;
 - interrupt signals stop new scheduling and preserve completed work.
 
 Successful commands return `0`, lint validation failures return `1`, user-facing command

@@ -51,6 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser = subparsers.add_parser("plan", help="Preview concrete work and blockers.")
     plan_parser.add_argument("eval_id")
 
+    activate_parser = subparsers.add_parser(
+        "activate", help="Validate and activate a draft eval."
+    )
+    activate_parser.add_argument("eval_id")
+
     run_parser = subparsers.add_parser("run", help="Execute planned eval work.")
     run_parser.add_argument("eval_id")
     run_parser.add_argument("--only", metavar="MODEL")
@@ -107,6 +112,8 @@ def dispatch(args: argparse.Namespace) -> int:
         return command_list(project_root)
     if args.command == "plan":
         return command_plan(project_root, args.eval_id)
+    if args.command == "activate":
+        return command_activate(project_root, args.eval_id)
     if args.command == "run":
         return command_run(
             project_root,
@@ -247,6 +254,36 @@ def command_plan(project_root: Path, eval_id: str) -> int:
             print(f"- {blocker}")
     else:
         print("Execution blockers: none")
+    return 0
+
+
+def command_activate(project_root: Path, eval_id: str) -> int:
+    context = load_eval_context(project_root, eval_id)
+    status = context.evaluation["status"]
+    if status == "active":
+        print(f"{eval_id} is already active.")
+        return 0
+    if status == "complete":
+        raise TamesuError(
+            f"Cannot activate {eval_id}: the eval is complete. Create a new eval or "
+            "make an explicit reviewed manifest edit."
+        )
+
+    # Activation is the boundary between authoring and paid execution. Render every
+    # prompt before crossing it so errors hidden in an unselected item cannot be
+    # activated. This performs no provider calls and does not require credentials.
+    _render_all_prompts(context)
+
+    eval_path = context.eval_dir / "eval.yml"
+    source = eval_path.read_text(encoding="utf-8")
+    updated, replacements = re.subn(
+        r"(?m)^status:\s*draft\s*$", "status: active", source, count=1
+    )
+    if replacements != 1:
+        raise TamesuError(f"Could not update draft status in {eval_path}")
+    write_text(eval_path, updated)
+    load_eval_context(project_root, eval_id)
+    print(f"Activated {eval_id}.")
     return 0
 
 

@@ -10,9 +10,9 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from tamesu.cli import command_close, command_compare, command_run
+from tamesu.cli import command_activate, command_close, command_compare, command_run
 from tamesu.config import load_eval_context, load_yaml
-from tamesu.errors import ExecutionError, ProviderError
+from tamesu.errors import ConfigError, ExecutionError, ProviderError, TamesuError
 from tamesu.models import ProviderResponse
 from tamesu.planner import build_plan
 from tamesu.reporting import build_leaderboard, comparison_rows, status_summary
@@ -116,6 +116,64 @@ class ExampleIntegrationTests(unittest.TestCase):
         self.assertEqual(len(plan.specs), 4)
         self.assertEqual(len(plan.owed_specs), 4)
         self.assertEqual(plan.total_items, 32)
+
+    def test_activate_moves_a_valid_draft_to_active(self) -> None:
+        eval_path = (
+            self.project
+            / "cases/support-ticket-triage/experiments/decision-rules/evals/prompt-ablation/eval.yml"
+        )
+        eval_path.write_text(
+            eval_path.read_text(encoding="utf-8").replace(
+                "status: active", "status: draft"
+            ),
+            encoding="utf-8",
+        )
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            self.assertEqual(command_activate(self.project, EVAL_ID), 0)
+
+        self.assertEqual(
+            load_eval_context(self.project, EVAL_ID).evaluation["status"], "active"
+        )
+        self.assertEqual(stdout.getvalue(), f"Activated {EVAL_ID}.\n")
+
+    def test_activate_is_idempotent_for_an_active_eval(self) -> None:
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            self.assertEqual(command_activate(self.project, EVAL_ID), 0)
+        self.assertEqual(stdout.getvalue(), f"{EVAL_ID} is already active.\n")
+
+    def test_activate_refuses_a_complete_eval(self) -> None:
+        eval_path = (
+            self.project
+            / "cases/support-ticket-triage/experiments/decision-rules/evals/prompt-ablation/eval.yml"
+        )
+        eval_path.write_text(
+            eval_path.read_text(encoding="utf-8").replace(
+                "status: active", "status: complete"
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(TamesuError, "the eval is complete"):
+            command_activate(self.project, EVAL_ID)
+
+    def test_activate_does_not_change_an_invalid_draft(self) -> None:
+        eval_path = (
+            self.project
+            / "cases/support-ticket-triage/experiments/decision-rules/evals/prompt-ablation/eval.yml"
+        )
+        eval_path.write_text(
+            eval_path.read_text(encoding="utf-8").replace(
+                "status: active", "status: draft"
+            ),
+            encoding="utf-8",
+        )
+        prompt_path = eval_path.parents[2] / "prompts" / "user.md.j2"
+        prompt_path.write_text("{{ item.input.not_a_field }}\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ConfigError, "Unknown template value"):
+            command_activate(self.project, EVAL_ID)
+        self.assertEqual(load_yaml(eval_path)["status"], "draft")
 
     def test_plan_has_known_cost_exposure(self) -> None:
         from tamesu.pricing import estimate_plan_cost

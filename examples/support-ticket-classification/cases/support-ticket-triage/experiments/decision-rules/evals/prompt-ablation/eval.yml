@@ -1,6 +1,6 @@
 schema_version: 1
 name: prompt-ablation
-status: active
+status: draft
 question: >
   Do explicit routing rules improve exact-match support-ticket classification accuracy?
 description: >
