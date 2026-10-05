@@ -228,21 +228,23 @@ defaults:
   timeout_seconds: 300
   retries: 2
   budget_usd: 25.00
+  judge_budget_usd: 5.00
   parameters:
-    size: 1536x1024
-    quality: high
+    image:
+      size: 1536x1024
+      output_format: png
+    provider_options: {}
 
 arms:
   - id: product-only
-    description: Product views only.
-    references:
-      - product
+    description: One product, no scanner reference.
+    prompts:
+      prompt: ../../prompts/product-only.md
 
   - id: product-plus-scanner
-    description: Product views and the shared scanner reference.
-    references:
-      - product
-      - scanner
+    description: The same prompt with the scanner described.
+    prompts:
+      prompt: ../../prompts/product-plus-scanner.md
 
 runs:
   - model: gpt-image-2
@@ -250,39 +252,54 @@ runs:
     arms:
       - product-only
       - product-plus-scanner
+    parameters:
+      provider_options:
+        quality: low
 
-  - model: gemini-image
-    provider: gemini
+  - model: muse-image-1.0
+    provider: meta
     arms:
       - product-only
-      - product-plus-scanner
+    parameters:
+      provider_options:
+        reasoning_strength: low
+        tool_enablement:
+          enable_image_search: false
+          enable_web_search: false
+          enable_shell: false
 
 evaluation:
   mechanical:
-    - output_exists
     - decodable_image
-    - expected_dimensions
+    - min_resolution: {width: 1024, height: 768, prerequisite: true}
+    - format_match
   model_judges:
-    - rubric: ../../rubrics/visual-alignment.yml
-      model: judge-model
-      provider: judge-provider
+    - id: vision-judge-1
+      provider: meta
+      model: muse-spark-1.3
+      rubric: ../../rubrics/visual-alignment.yml
+      prompts:
+        system: ../../prompts/judge-system.md
+        user: ../../prompts/judge-user.md
       repetitions: 2
-      blind: true
   human_review:
-    mode: blinded_pairwise
-    required: true
+    rubric: ../../rubrics/visual-alignment.yml
+  acceptance:
+    requires: [mechanical, human]
+    human:
+      required_reviews_per_item: 1
+      on_disagreement: adjudicate
+    model_judge:
+      role: screen
+    selection: none
 
 metrics:
-  primary: scan_alignment_pass_rate
+  primary: product_reference_pass_rate
   secondary:
-    - barcode_visibility
-    - scanner_aim
-    - hand_anatomy
-    - product_identity
-    - overall_plausibility
-    - generation_failure_rate
-    - median_latency_ms
-    - mean_cost_usd
+    - generation_success_rate
+    - human_pass_rate_given_image
+    - review_completion_rate
+    - cost_per_accepted_usd
 ```
 
 ### Identity and status
@@ -390,33 +407,104 @@ The evaluation block declares required scorers and reviewers.
 
 #### `mechanical`
 
-A list of registered deterministic checks. Unknown checks are errors. Mechanical checks
-run before subjective judging and remain visible when they fail.
+A list of registered deterministic checks for the eval's task. Each entry is a name or a
+single-key mapping of name to parameters. Unknown checks and unknown parameters are errors.
+Mechanical checks run at generation time and remain visible when they fail.
+
+`structured_text` provides `valid_json`, `schema_valid`, and `exact_match` (no parameters).
+
+`image_generation` always applies mandatory integrity checks (bytes exist, the image
+decodes with Pillow, the format is PNG/JPEG/WebP, dimensions are non-degenerate, and
+byte/pixel/decompression-bomb limits hold). A failure is a terminal `invalid_artifact`
+outcome, not an infrastructure failure. It additionally offers eval-declared checks:
+
+| Check | Parameters | Passes when |
+|---|---|---|
+| `decodable_image` | none | Always recorded; documents the integrity check |
+| `min_resolution` | `width`, `height` | The image is at least that large |
+| `format_match` | none | The decoded type equals the requested `output_format` |
+| `non_uniform` | `min_stddev` (default `2.0`) | The image is not a single flat colour |
+| `has_transparency` | `require` (default `true`) | Transparency presence matches `require` |
+
+Every check also accepts `prerequisite: true`, which excludes failing images from model
+judging. A flat-colour image can be the correct answer to a different eval, so content
+checks are never global.
 
 #### `model_judges`
 
-Each model judge supports:
+Model judges apply a rubric to stored images in a separate, repeatable, paid step
+(`tamesu judge`). Only tasks that store reviewable artifacts support them.
 
 | Field | Type | Required | Description |
 |---|---|---:|---|
-| `rubric` | path | Yes | Structured rubric used by the judge |
-| `model` | string | Yes | Judge model identifier |
-| `provider` | string | Yes | Judge provider adapter |
-| `repetitions` | integer | Yes | Judgments per eligible item; at least `1` |
-| `blind` | boolean | Yes | Whether generator identity and arm are withheld |
-| `parameters` | mapping | No | Provider-specific judge parameters |
+| `id` | kebab-case string | Yes | Unique judge ID; part of each judgment's file name |
+| `provider` | string | Yes | Judge provider adapter; needs multimodal structured output |
+| `model` | string | Yes | Registered model with `image_input` and `structured_output` |
+| `rubric` | path | Yes | Machine-readable rubric (see below) |
+| `prompts.system`, `prompts.user` | paths | Yes | Judge prompts; see blinding below |
+| `repetitions` | integer | No | Judge calls per eligible item; default `1` |
+| `parameters` | mapping | No | `effort`, `max_tokens`, and similar |
 
-Rubric files and judge settings contribute to the content and specification fingerprints.
+Declaring any judge requires `defaults.judge_budget_usd`, a ceiling that is tracked
+separately from `budget_usd` so rejudging cannot drain the generation budget.
+
+The judge sees the image, the item's `input` (the product brief), and the rubric, and
+nothing else. Prompt templates may reference only `item.id`, `item.input.*`, `rubric.name`,
+and `rubric.text`; any other reference (arm, model, run, repetition, cost, `expected`) is a
+template error. Judges are **not** part of a generation run's identity, so adding or
+repeating a judge never un-banks a run.
+
+#### Rubrics
+
+A rubric is a YAML file. It is the single source for the judge's output schema, the review
+pack, and the report:
+
+```yaml
+schema_version: 1
+name: product-reference-quality
+rationale: product-reference-quality.md   # optional prose, relative to this file
+dimensions:
+  - id: single-product-composition
+    question: Exactly one complete product, isolated, fully in frame.
+    reason_codes: [multiple-products, cropped, wrong-viewpoint]
+acceptance:
+  rule: all_dimensions_pass
+```
+
+Each dimension is one yes/no claim. A failing dimension carries one reason code from its
+list; a passing one carries `none` (a reserved word, not allowed as a reason code). The
+overall verdict is computed from the dimensions and is never requested from a judge.
+Editing a rubric changes its fingerprint, which marks earlier judgments and reviews stale
+(they stay on disk but stop counting). See `schemas/rubric.schema.json`.
 
 #### `human_review`
 
 | Field | Type | Required | Description |
 |---|---|---:|---|
-| `mode` | string | Yes | Review protocol, initially `blinded_pairwise` or `blinded_single` |
-| `required` | boolean | Yes | Whether review is required before completion |
+| `rubric` | path | Yes | The rubric reviewers answer |
 
-The review protocol may gain task-specific fields before schema version 1 is finalized.
-Human judgments remain separate from model judgments in stored evidence and reports.
+Humans review outside the process: `tamesu review export` writes a blinded pack and
+`tamesu review import` ingests the completed responses. Reviewer identity is a free-text
+ID, not authentication. Human and model verdicts stay separate in stored evidence and
+reports.
+
+#### `acceptance`
+
+Declares, before any run, what makes an image acceptable.
+
+| Field | Type | Description |
+|---|---|---|
+| `requires` | list | Any of `mechanical`, `model_judge`, `human`; all listed sources must pass |
+| `human.required_reviews_per_item` | integer | Current reviews needed per image; default `1` |
+| `human.on_disagreement` | `adjudicate` or `reject` | `reject` fails a split verdict; `adjudicate` asks for one more review and decides by majority of an odd count |
+| `model_judge.role` | `screen` or `gate` | `screen` is informational; `gate` must appear in `requires` |
+| `selection` | `none` or `first_pass` | `none` reports every repetition; `first_pass` promotes the first accepted one per product |
+
+Lint rules: `human` in `requires` needs a `human_review` block and vice versa; a `screen`
+judge can never be in `requires` (it can never be the sole gate); `gate` needs
+`model_judge` in `requires`. An eval without an `acceptance` block requires only
+`mechanical`. `mechanical` and `acceptance` are part of a run's specification fingerprint,
+so changing them after a run exists leaves that run stale.
 
 ### `metrics`
 

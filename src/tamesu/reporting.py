@@ -16,6 +16,9 @@ from .planner import read_run_manifests
 LOWER_IS_BETTER_METRICS = {
     "generation_failure_rate",
     "invalid_output_rate",
+    "safety_filter_rate",
+    "invalid_artifact_rate",
+    "cost_per_accepted_usd",
     "mean_cost_usd",
     "median_latency_ms",
 }
@@ -281,6 +284,8 @@ def build_evaluation_report(plan: Plan) -> Path:
                 )
             lines.append("")
 
+    lines.extend(_image_sections(plan))
+
     lines.extend(["## Evidence coverage", ""])
     lines.append(f"- Planned runs: {counts['planned']}")
     lines.append(f"- Banked runs: {counts['banked']}")
@@ -341,6 +346,121 @@ def build_evaluation_report(plan: Plan) -> Path:
     return path
 
 
+def _image_sections(plan: Plan) -> list[str]:
+    """Image evals: mechanical, model-judge, and human evidence side by side, never blended."""
+    from .tasks import task_for
+
+    context = plan.context
+    if not task_for(context.evaluation, context.case).supports_review:
+        return []
+    lines: list[str] = []
+    for fingerprint, run_id in sorted(plan.banked_run_ids.items(), key=lambda pair: pair[1]):
+        run_dir = context.eval_dir / "runs" / run_id
+        report_path = run_dir / "report.yml"
+        if not report_path.is_file():
+            continue
+        report = load_yaml(report_path)
+        evidence = report.get("evidence")
+        if not evidence:
+            continue
+        counts, columns = evidence["counts"], evidence["columns"]
+        policy = evidence["policy"]
+        lines.extend([f"## Image evidence: {run_id}", ""])
+        lines.append(
+            f"Acceptance requires: {', '.join(policy['requires'])}"
+            + (f"; model judge role: {policy['model_judge_role']}" if policy["model_judge_role"] else "")
+            + f"; selection: {policy['selection']}."
+        )
+        lines.extend(
+            [
+                "",
+                f"- Planned: {counts['planned']}; generated an image: {counts['generated']}",
+                f"- Accepted: {counts['accepted']}; rejected: {counts['rejected']}; pending: {counts['pending']} "
+                "(generation failures stay in the end-to-end denominator)",
+                f"- End-to-end pass rate: {_format_number(evidence['metrics']['product_reference_pass_rate'])}; "
+                f"given an image: {_format_number(evidence['metrics']['product_reference_pass_rate_given_image'])}",
+                "",
+                "| Evidence | Passed | Evaluated | Of generated |",
+                "|---|---:|---:|---:|",
+                f"| Mechanical | {columns['mechanical']['pass']} | {columns['mechanical']['of_generated']} | "
+                f"{columns['mechanical']['of_generated']} |",
+                f"| Model judge | {columns['model_judge']['pass']} | {columns['model_judge']['judged']} | "
+                f"{columns['model_judge']['of_generated']} |",
+                f"| Human | {columns['human']['pass']} | {columns['human']['reviewed']} | "
+                f"{columns['human']['of_generated']} |",
+                "",
+            ]
+        )
+        review = evidence["review"]
+        if review["completion"] is not None:
+            lines.append(
+                f"Review completion: {review['reviewed_items']}/{review['generated_items']} "
+                f"({review['owed_reviews']} review(s) owed)."
+            )
+            lines.append("")
+        for source, label in (("human", "Human"), ("model_judge", "Model judge")):
+            stats = evidence["dimensions"][source]
+            if not stats:
+                continue
+            lines.extend([f"### {label} dimension failures", "", "| Dimension | Failed | Evaluated | Top reasons |", "|---|---:|---:|---|"])
+            for dimension_id, row in stats.items():
+                reasons = ", ".join(f"{code} ({n})" for code, n in row["top_reasons"].items()) or "—"
+                lines.append(f"| {dimension_id} | {row['failed']} | {row['evaluated']} | {reasons} |")
+            lines.append("")
+        if evidence["agreement"]:
+            lines.extend(
+                [
+                    "### Judge vs human agreement",
+                    "",
+                    "| Dimension | n | Raw agreement | Cohen's kappa | Note |",
+                    "|---|---:|---:|---:|---|",
+                ]
+            )
+            for dimension_id, row in evidence["agreement"].items():
+                note = "too few paired items for kappa to mean anything" if row["insufficient_data"] else ""
+                lines.append(
+                    f"| {dimension_id} | {row['n']} | {_format_number(row['raw_agreement'])} | "
+                    f"{_format_number(row['kappa'])} | {note} |"
+                )
+            lines.append("")
+        cost = evidence["cost"]
+        lines.append(
+            "Cost: generation {g}, judging {j}, total {t}, per accepted image {a}.".format(
+                g=_money(cost["generation_usd"]),
+                j=_money(cost["judge_usd"]),
+                t=_money(cost["total_usd"]),
+                a=_money(cost["per_accepted_usd"]),
+            )
+        )
+        lines.extend(["", "### Items", "", "| Item | Outcome | Mechanical | Model judge | Human | Acceptance | Evidence |", "|---|---|---|---|---|---|---|"])
+        for item in report["items"]:
+            item_id = item["item_id"]
+            outcome = (item.get("outcome") or {}).get("status", item.get("state"))
+            mechanical = "pass" if item.get("mechanical_scores") and all(
+                v.get("pass") for v in item["mechanical_scores"].values()
+            ) else "fail"
+            judge = (item.get("model_judge") or {}).get("verdict") or "—"
+            human = (item.get("human") or {}).get("verdict") or (item.get("human") or {}).get("state") or "—"
+            acceptance = (item.get("acceptance") or {}).get("state", "—")
+            base = f"runs/{run_id}/items/{item_id}"
+            links = []
+            if item.get("output"):
+                links.append(f"[image]({base}/{item['output']['path']})")
+            item_dir = run_dir / "items" / item_id
+            for sub in ("judgments", "reviews"):
+                for path in sorted((item_dir / sub).glob("*.yml")) if (item_dir / sub).is_dir() else []:
+                    links.append(f"[{sub[:-1]}]({base}/{sub}/{path.name})")
+            lines.append(
+                f"| {item_id} | {outcome} | {mechanical} | {judge} | {human} | {acceptance} | {' '.join(links) or '—'} |"
+            )
+        lines.append("")
+    return lines
+
+
+def _money(value: Any) -> str:
+    return f"${value:.6f}" if _is_number(value) else "unknown"
+
+
 def _observed_result(rows: list[dict[str, Any]], primary: str) -> list[str]:
     measured = [row for row in rows if _is_number(row.get("primary_mean"))]
     if not measured:
@@ -398,7 +518,7 @@ def _format_metric_value(metric: str, value: Any) -> str:
         return f"{number:.4f} ({number * 100:.2f}%)"
     if metric.endswith("_latency_ms"):
         return f"{number:.1f} ms"
-    if metric.endswith("_cost_usd"):
+    if metric.endswith("_cost_usd") or metric.endswith("_accepted_usd"):
         return f"${number:.6f}"
     return f"{number:.4f}"
 

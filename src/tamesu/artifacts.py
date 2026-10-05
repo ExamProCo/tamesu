@@ -9,12 +9,16 @@ from typing import Any
 import yaml
 
 
-def _atomic_write(path: Path, content: str) -> None:
+def _atomic_write(path: Path, content: str | bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+        if isinstance(content, bytes):
+            stream = os.fdopen(descriptor, "wb")
+        else:
+            stream = os.fdopen(descriptor, "w", encoding="utf-8", newline="\n")
+        with stream:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
@@ -32,6 +36,10 @@ def _atomic_write(path: Path, content: str) -> None:
             temporary_path.unlink()
 
 
+def write_bytes(path: Path, content: bytes) -> None:
+    _atomic_write(path, content)
+
+
 def write_text(path: Path, content: str) -> None:
     _atomic_write(path, content)
 
@@ -45,3 +53,25 @@ def write_yaml(path: Path, value: Any) -> None:
         path,
         yaml.safe_dump(value, sort_keys=False, allow_unicode=True, default_flow_style=False),
     )
+
+
+def write_yaml_exclusive(path: Path, value: Any) -> None:
+    """Create a new file atomically; raise FileExistsError instead of overwriting.
+
+    Used for immutable evidence (judgments, reviews): the content is fully written to a
+    temporary file, then hard-linked into place, which fails if the target already exists.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(
+                yaml.safe_dump(value, sort_keys=False, allow_unicode=True, default_flow_style=False)
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary_path, path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()

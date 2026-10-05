@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tamesu.dev/schemas/review.schema.json",
+  "title": "Tamesu human review (immutable)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "review_id",
+    "run_id",
+    "item_id",
+    "image_sha256",
+    "pack_id",
+    "reviewer",
+    "submitted_at",
+    "rubric",
+    "dimensions",
+    "verdict"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "review_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "item_id": {
+      "type": "string"
+    },
+    "image_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "pack_id": {
+      "type": "string"
+    },
+    "reviewer": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "description": "Free-text ID, not authentication."
+    },
+    "submitted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rubric": {
+      "type": "object",
+      "required": [
+        "name",
+        "sha256"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "pass",
+          "reason_code"
+        ],
+        "properties": {
+          "pass": {
+            "type": "boolean"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "explanation": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

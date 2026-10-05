@@ -1,0 +1,17 @@
+schema_version: 1
+name: product-reference
+title: Product Reference Images
+description: >
+  Generate one fictional product-reference image per product brief, then decide which
+  images are fit to use as inputs for later experiments.
+business_use: >
+  A team building a product-scanning experiment needs clean reference images of products
+  that do not exist, so no real brand, logo, or packaging is involved.
+current_problem: >
+  Real product photos carry brand and licensing risk. Generated images are cheap, but
+  nobody knows how many are usable without looking at them.
+technical_uncertainty: >
+  We do not know what share of generated images show exactly one complete, correctly
+  described, brand-free product, or whether an image model's judgment of that matches a
+  person's.
+default_task: image_generation

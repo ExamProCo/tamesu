@@ -20,7 +20,9 @@ new conventions. Read the repository's Tamesu documentation when available, espe
 
 Treat those project-local documents and `tamesu lint` as authoritative over examples in
 this skill. If the project has no existing Tamesu pattern or local docs, read
-[the structured-text authoring reference](references/structured-text.md).
+[the structured-text authoring reference](references/structured-text.md). For image
+generation evals, read `docs/image-evals.md` and follow
+[the image-generation authoring reference](references/image-generation.md).
 
 ## Author the evaluation contract
 

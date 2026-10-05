@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tamesu.dev/schemas/judgment.schema.json",
+  "title": "Tamesu model judgment (immutable)",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "judgment_id",
+    "run_id",
+    "item_id",
+    "created_at",
+    "judge",
+    "rubric",
+    "image_sha256",
+    "prompt",
+    "attempts",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "judgment_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "item_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "judge": {
+      "type": "object",
+      "required": [
+        "id",
+        "provider",
+        "model"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "object"
+        },
+        "parameters_sha256": {
+          "type": "string"
+        }
+      }
+    },
+    "rubric": {
+      "type": "object",
+      "required": [
+        "name",
+        "sha256"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "image_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "prompt": {
+      "type": "object",
+      "required": [
+        "system_sha256",
+        "user_sha256"
+      ]
+    },
+    "attempts": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "error",
+        "invalid_output"
+      ]
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "pass",
+          "reason_code"
+        ],
+        "properties": {
+          "pass": {
+            "type": "boolean"
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "explanation": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "usage": {
+      "type": "object"
+    },
+    "cost_usd": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "provider_request_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "response_metadata": {
+      "type": "object"
+    },
+    "raw_output_sha256": {
+      "type": "string"
+    },
+    "raw_output": {
+      "type": "string"
+    },
+    "error": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "dimensions",
+          "verdict"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "error",
+              "invalid_output"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      }
+    }
+  ]
+}

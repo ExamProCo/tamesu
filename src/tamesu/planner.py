@@ -8,6 +8,7 @@ from . import __version__
 from .config import load_yaml, resolve_contained
 from .identity import digest_value, inventory_files
 from .models import EvalContext, Plan, RunSpec
+from .tasks import get_task
 
 
 def build_plan(context: EvalContext) -> Plan:
@@ -92,10 +93,11 @@ def make_run_spec(
 ) -> RunSpec:
     defaults = context.evaluation["defaults"]
     label = f"{_slug(model)}--{arm_id}--rep{repetition}"
+    specification_task = context.evaluation.get("task", context.case.get("default_task"))
     specification_payload = {
         "schema_version": 1,
         "eval_id": context.eval_id,
-        "task": context.evaluation.get("task", context.case.get("default_task")),
+        "task": specification_task,
         "provider": provider,
         "model": model,
         "arm": arm_id,
@@ -104,14 +106,16 @@ def make_run_spec(
         "parameters": parameters,
         "timeout_seconds": defaults["timeout_seconds"],
         "retries": defaults["retries"],
-        "evaluation": context.evaluation.get("evaluation", {}),
+        "evaluation": get_task(specification_task).identity_evaluation(
+            context.evaluation.get("evaluation", {})
+        ),
         "metrics": context.evaluation.get("metrics", {}),
         "probe": probe,
     }
     execution_paths = [
         *prompts.values(),
         Path(__file__).with_name("scoring.py"),
-        Path(__file__).parent / "tasks" / "structured_text.py",
+        *get_task(specification_task).code_files(),
     ]
     if context.output_schema_path:
         execution_paths.append(context.output_schema_path)

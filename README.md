@@ -81,6 +81,7 @@ Case → Experiment → Eval → Run
 - [Repository and file structure](docs/file-structure.md)
 - [Manifest reference](docs/manifests.md)
 - [Command-line interface](docs/cli.md)
+- [Image evals: generate, judge, review, promote](docs/image-evals.md)
 - [Presentation and case package contract](docs/packages.md)
 - [Tamesu Showcase registry](https://github.com/ExamProCo/tamesu-showcase)
 - [Configuration](docs/configuration.md)

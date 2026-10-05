@@ -24,7 +24,10 @@ current repository and keep all evaluation evidence inspectable on disk.
 | `run` | Execute planned run configurations | Yes | Yes |
 | `status` | Reconcile the plan with evidence on disk | No | No |
 | `resume` | Continue a compatible partial run | Yes | Yes |
-| `rescore` | Recompute scores from stored evidence | Yes | No in 0.1 |
+| `rescore` | Recompute scores and acceptance from stored evidence | Yes | No |
+| `judge` | Run model judges over stored images | Yes | Yes |
+| `review` | Export, import, and track blinded human review | Yes | No |
+| `promote` | Copy accepted images into a new dataset version | Yes | No |
 | `compare` | Compare compatible completed runs | No | No |
 | `leaderboard` | Rebuild an eval's Markdown leaderboard | Yes | No |
 | `report` | Build a human-readable eval report | Yes | No |
@@ -37,8 +40,9 @@ current repository and keep all evaluation evidence inspectable on disk.
 | `publish` | Add a package to an inspectable registry | Yes | No |
 | `site build` | Build the static showcase from a registry | Yes | No |
 
-`rescore` never calls a provider in Tamesu 0.1. It recomputes deterministic scores from
-stored text outputs.
+`rescore` never calls a provider. It recomputes deterministic scores and, for image evals,
+acceptance and metrics from stored outputs, judgments, and reviews. `judge` is the only
+paid command after generation. See [Image evals](image-evals.md).
 
 ## Presentation and packages
 
@@ -188,7 +192,10 @@ tamesu models --provider anthropic
 ```
 
 The tab-separated output includes each model's provider, accepted effort values, input
-and output token rates, and default output-token cap. Models not in this registry may
+and output token rates, default output-token cap, capabilities (`text_output`,
+`structured_output`, `image_input`, `image_output`), and, for image models, the pricing
+strategy. Image models show `unknown` token rates because they are billed per image or by
+image tokens. Models not in this registry may
 still be used with an explicit implemented provider, but their cost is unknown and their
 effort value cannot be checked during linting.
 
@@ -384,8 +391,76 @@ Rescoring:
 - preserves original generation artifacts and call logs;
 - atomically replaces the derived `report.yml` after success.
 
-Generation calls are forbidden during rescoring. If new model judgments would incur cost,
-the command must identify their count and exposure before making those calls.
+Generation and judge calls are forbidden during rescoring. For `image_generation` evals the
+command re-runs the declared mechanical checks on the stored image, then rebuilds acceptance
+and metrics from stored judgments and reviews. An image whose checksum no longer matches
+the one recorded at generation is reported as stale and is not re-scored as if it were
+current.
+
+## `tamesu judge`
+
+Run the eval's declared model judges over stored images. This is the only paid step after
+generation, and it never changes generation state.
+
+```sh
+tamesu judge product-reference-generation/meta-baseline
+tamesu judge product-reference-generation/meta-baseline --run <run-id> --judge vision-judge-1
+tamesu judge product-reference-generation/meta-baseline --limit-items 2
+```
+
+By default every banked run is judged. Each judge call writes a new immutable record under
+`items/<item>/judgments/`; judging twice yields two records and overwrites nothing. A judge
+outage is recorded as a judgment with `status: error` and leaves `result.yml` and `run.yml`
+untouched. Images are skipped (and listed) when they are missing, modified, from a
+changed dataset item, not generated, or failed a `prerequisite` mechanical check.
+
+Before calling a provider, `judge` checks recorded judge cost plus maximum exposure
+against `defaults.judge_budget_usd`. Judge cost has its own ledger; it is never counted
+against `budget_usd`.
+
+## `tamesu review`
+
+Human review round-trips through files, so reviewers can use a spreadsheet, a static page,
+or any hosted tool.
+
+```sh
+tamesu review export <eval-id> [--run RUN_ID] --out review-pack/ [--reviewer ID] [--seed N] [--all]
+tamesu review import <eval-id> review-pack/responses.yml
+tamesu review status <eval-id> [--run RUN_ID]
+```
+
+`export` writes `pack.yml`, the images renamed to random presentation IDs in shuffled
+order, the rubric dimensions, and a blank `responses.yml`. The mapping from presentation
+ID back to run, item, and image checksum is written to `review/keys/<pack-id>.yml` inside
+the eval directory, outside the pack. Keep that key away from reviewers. A warning is
+printed when an image carries embedded metadata that could identify its generator. By
+default only images that still owe reviews are exported.
+
+`import` validates everything first and writes nothing unless every response is valid:
+unknown presentation IDs, missing or unknown dimensions, reason codes outside the rubric,
+a changed rubric, or an image changed since export all reject the import. Untouched
+template rows count as not yet reviewed. Each submission becomes an immutable
+`reviews/<reviewer>--<timestamp>.yml`; a second review by the same reviewer adds a record
+and the latest is current. `status` shows reviews owed, adjudications owed, and stale
+records.
+
+## `tamesu promote`
+
+Copy accepted images into a new, versioned dataset with full provenance.
+
+```sh
+tamesu promote product-reference-generation/meta-baseline \
+  --to product-scanning-alignment/product-scanning-v2 --dry-run
+```
+
+The eval must be closed. Promotion only creates a new `cases/<case>/datasets/<name>/`
+directory (existing versions are frozen) holding `dataset.yml`, `images/`, and
+`promotion.yml`. Each entry records its source eval, run, and item, the image checksum, the
+generator (provider, requested model, returned model), the prompt fingerprint, and the
+review and judge decisions. `--dry-run` prints what would be copied and what was excluded
+and why. Products with no accepted image are listed explicitly rather than dropped.
+Under `selection: none`, every accepted repetition is promoted with a run-qualified ID;
+under `first_pass`, the first accepted repetition per product is promoted.
 
 ## `tamesu compare`
 
@@ -463,9 +538,16 @@ When validation succeeds, the command changes the eval status to `complete` and 
 the leaderboard and evaluation report. Those changes should be reviewed and committed
 like any other plan change.
 
-If completion requirements are intentionally waived, the reason must first be recorded in
-the eval manifest using the final schema's explicit closure field. `close` never silently
-waives missing evidence.
+For image evals, `close` also refuses while any generated image is still pending required
+evidence (reviews, or judgments for a `gate` judge), listing what is owed. To close anyway:
+
+```sh
+tamesu close <eval-id> --allow-incomplete-review
+```
+
+Every close of an image eval writes `closing.yml` recording per-run accepted, rejected,
+and pending counts and whether the gap was waived. `close` never silently waives missing
+evidence.
 
 ## Typical workflow
 
@@ -515,7 +597,8 @@ The CLI is intended to work in local shells and continuous integration:
 - errors and actionable diagnostics go to standard error;
 - files are written atomically except append-only call logs;
 - paid work is never triggered by `lint`, `list`, `models`, `plan`, `activate`, `status`,
-  `compare`, `leaderboard`, `report`, or `close`;
+  `compare`, `leaderboard`, `report`, `rescore`, `review`, `promote`, or `close`; only
+  `run`, `resume`, and `judge` call providers;
 - interrupt signals stop new scheduling and preserve completed work.
 
 Successful commands return `0`, lint validation failures return `1`, user-facing command

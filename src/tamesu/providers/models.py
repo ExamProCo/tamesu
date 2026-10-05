@@ -1,10 +1,90 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
-PRICING_VERIFIED_AT = "2026-08-25"
+PRICING_VERIFIED_AT = "2026-10-05"
+
+
+TEXT_CAPABILITIES = frozenset({"text_output", "structured_output"})
+VISION_CAPABILITIES = TEXT_CAPABILITIES | {"image_input"}
+IMAGE_OUTPUT_CAPABILITIES = frozenset({"image_output"})
+
+
+@dataclass(frozen=True)
+class FlatImagePricing:
+    """A flat price per generated image, independent of size or quality."""
+
+    usd_per_image: float
+
+    def price(self, parameters: dict[str, Any]) -> float | None:
+        return self.usd_per_image
+
+    def cost(self, parameters: dict[str, Any], usage: dict[str, Any], images: int) -> float | None:
+        return round(self.usd_per_image * images, 6)
+
+
+@dataclass(frozen=True)
+class ImageMatrixPricing:
+    """Per-image prices keyed by (quality, size). Missing combinations are unknown."""
+
+    usd_per_image: dict[tuple[str, str], float]
+
+    def price(self, parameters: dict[str, Any]) -> float | None:
+        image = parameters.get("image") if isinstance(parameters.get("image"), dict) else {}
+        options = (
+            parameters.get("provider_options")
+            if isinstance(parameters.get("provider_options"), dict)
+            else {}
+        )
+        key = (str(options.get("quality", "")), str(image.get("size", "")))
+        return self.usd_per_image.get(key)
+
+    def cost(self, parameters: dict[str, Any], usage: dict[str, Any], images: int) -> float | None:
+        unit = self.price(parameters)
+        return None if unit is None else round(unit * images, 6)
+
+
+@dataclass(frozen=True)
+class ImageTokenPricing:
+    """Token-billed image models. The bill is exact from usage, but a plan cannot predict
+    output tokens for a quality/size, so planning stays unknown unless a table is supplied."""
+
+    text_input_usd_per_million: float
+    image_input_usd_per_million: float
+    image_output_usd_per_million: float
+    expected_output_tokens: dict[tuple[str, str], int] = field(default_factory=dict)
+
+    def price(self, parameters: dict[str, Any]) -> float | None:
+        image = parameters.get("image") if isinstance(parameters.get("image"), dict) else {}
+        options = (
+            parameters.get("provider_options")
+            if isinstance(parameters.get("provider_options"), dict)
+            else {}
+        )
+        tokens = self.expected_output_tokens.get((str(options.get("quality", "")), str(image.get("size", ""))))
+        if tokens is None:
+            return None
+        return round(tokens * self.image_output_usd_per_million / 1_000_000, 6)
+
+    def cost(self, parameters: dict[str, Any], usage: dict[str, Any], images: int) -> float | None:
+        if "output_tokens" not in usage:
+            return None
+        text_in = int(usage.get("text_input_tokens", usage.get("input_tokens", 0)))
+        image_in = int(usage.get("image_input_tokens", 0))
+        return round(
+            (
+                text_in * self.text_input_usd_per_million
+                + image_in * self.image_input_usd_per_million
+                + int(usage["output_tokens"]) * self.image_output_usd_per_million
+            )
+            / 1_000_000,
+            6,
+        )
+
+
+ImagePricing = FlatImagePricing | ImageMatrixPricing | ImageTokenPricing
 
 
 @dataclass(frozen=True)
@@ -15,6 +95,8 @@ class ModelSpec:
     output_usd_per_million: float | None = None
     max_tokens: int = 16_000
     thinking: str | None = None
+    capabilities: frozenset[str] = TEXT_CAPABILITIES
+    image_pricing: ImagePricing | None = None
 
 
 ANTHROPIC_EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -26,6 +108,9 @@ GROK_EFFORTS = ("low", "medium", "high", "xhigh")
 GROK_45_EFFORTS = ("low", "medium", "high")
 NOVA_EFFORTS = ("low", "medium", "high")
 
+
+# USD per million tokens, from OpenAI's pricing page (verified 2026-10-05).
+OPENAI_IMAGE_2_PRICING = ImageTokenPricing(5.0, 8.0, 30.0)
 
 # Ported from Shiori's evaluated provider registry. Prices are USD per million tokens and
 # should be reviewed against first-party pricing before long-running comparisons.
@@ -49,9 +134,29 @@ MODELS: dict[str, ModelSpec] = {
     "gpt-5.4-mini": ModelSpec("openai", OPENAI_EFFORTS, 0.75, 4.50),
     "gpt-5.4-nano": ModelSpec("openai", OPENAI_EFFORTS, 0.20, 1.25),
     # Meta
-    "muse-spark-1.2": ModelSpec("meta", META_EFFORTS, 1.25, 4.25),
-    "muse-spark-1.1": ModelSpec("meta", META_EFFORTS, 1.25, 4.25),
+    "muse-spark-1.3": ModelSpec(
+        "meta", META_EFFORTS, 1.25, 4.25, capabilities=VISION_CAPABILITIES
+    ),
+    "muse-spark-1.2": ModelSpec(
+        "meta", META_EFFORTS, 1.25, 4.25, capabilities=VISION_CAPABILITIES
+    ),
+    "muse-spark-1.1": ModelSpec(
+        "meta", META_EFFORTS, 1.25, 4.25, capabilities=VISION_CAPABILITIES
+    ),
     "muse-spark-1.2-contributor": ModelSpec("meta", META_EFFORTS),
+    # Image generation (not token-priced text models; see image_pricing)
+    "muse-image-1.0": ModelSpec(
+        "meta", (), capabilities=IMAGE_OUTPUT_CAPABILITIES, image_pricing=FlatImagePricing(0.01)
+    ),
+    "gpt-image-2": ModelSpec(
+        "openai", (), capabilities=IMAGE_OUTPUT_CAPABILITIES, image_pricing=OPENAI_IMAGE_2_PRICING
+    ),
+    "gpt-image-2.5-sunburst": ModelSpec(
+        "openai", (), capabilities=IMAGE_OUTPUT_CAPABILITIES, image_pricing=OPENAI_IMAGE_2_PRICING
+    ),
+    "gpt-image-2.5-flare": ModelSpec(
+        "openai", (), capabilities=IMAGE_OUTPUT_CAPABILITIES, image_pricing=OPENAI_IMAGE_2_PRICING
+    ),
     # xAI
     "grok-4.6": ModelSpec("grok", GROK_EFFORTS, 2.0, 6.0),
     "grok-4.5": ModelSpec("grok", GROK_45_EFFORTS, 2.0, 6.0),
@@ -146,3 +251,13 @@ def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float | 
 
 def models_for_provider(provider: str) -> dict[str, ModelSpec]:
     return {name: spec for name, spec in MODELS.items() if spec.provider == provider}
+
+
+def image_cost(
+    model: str, parameters: dict[str, Any], usage: dict[str, Any], images: int
+) -> float | None:
+    """Exact cost of an image call from its usage, or None when it cannot be priced."""
+    spec = registered(model)
+    if spec is None or spec.image_pricing is None:
+        return None
+    return spec.image_pricing.cost(parameters, usage, images)

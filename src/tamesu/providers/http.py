@@ -31,12 +31,18 @@ def post_json(
         request_id = _request_id(exc.headers)
         body = exc.read().decode("utf-8", errors="replace")
         message = _safe_error_message(body, exc.reason)
+        error_code, error_type = _error_identity(body)
         retryable = exc.code in {408, 409, 424, 429} or 500 <= exc.code <= 599
         raise ProviderError(
             f"{provider_name} API error {exc.code}: {message}",
             retryable=retryable,
             status_code=exc.code,
             request_id=request_id,
+            response_metadata={
+                key: value
+                for key, value in (("error_code", error_code), ("error_type", error_type))
+                if value
+            },
         ) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise ProviderError(f"{provider_name} request failed: {exc}", retryable=True) from exc
@@ -72,3 +78,16 @@ def _safe_error_message(body: str, fallback: object) -> str:
         if isinstance(document.get("message"), str):
             return document["message"]
     return str(fallback)
+
+
+def _error_identity(body: str) -> tuple[str | None, str | None]:
+    """Provider error `code` and `type`, when present, so adapters can classify refusals."""
+    try:
+        document = json.loads(body)
+    except json.JSONDecodeError:
+        return None, None
+    error = document.get("error") if isinstance(document, dict) else None
+    if not isinstance(error, dict):
+        return None, None
+    code, kind = error.get("code"), error.get("type")
+    return (code if isinstance(code, str) else None, kind if isinstance(kind, str) else None)

@@ -11,22 +11,13 @@ from .discovery import eval_id_from_path, eval_path
 from .errors import ConfigError
 from .models import EvalContext
 from .providers.models import registered, validate_effort
+from .tasks import TASKS, get_task
+from .tasks.base import parse_mechanical_entry
 
 
 ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-SUPPORTED_TASKS = {"structured_text"}
+SUPPORTED_TASKS = set(TASKS)
 SUPPORTED_PROVIDERS = {"anthropic", "openai", "meta", "grok", "bedrock", "gemini"}
-MECHANICAL_SCORERS = {"valid_json", "schema_valid", "exact_match"}
-BUILT_IN_METRICS = {
-    "exact_match_rate",
-    "category_accuracy",
-    "priority_accuracy",
-    "requires_human_accuracy",
-    "invalid_output_rate",
-    "generation_failure_rate",
-    "median_latency_ms",
-    "mean_cost_usd",
-}
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -226,6 +217,7 @@ def _validate_eval(
             "timeout_seconds",
             "retries",
             "budget_usd",
+            "judge_budget_usd",
             "parameters",
         },
         "eval.defaults",
@@ -242,18 +234,13 @@ def _validate_eval(
     if not isinstance(parameters, dict):
         errors.append("eval.defaults.parameters must be a mapping")
 
+    task_impl = get_task(task) if task in SUPPORTED_TASKS else None
     output_schema_path: Path | None = None
     output_schema: dict[str, Any] | None = None
-    raw_schema = evaluation.get("output_schema")
-    if task == "structured_text":
-        if not isinstance(raw_schema, str) or not raw_schema:
-            errors.append("eval.output_schema is required for structured_text")
-        else:
-            try:
-                output_schema_path = resolve_contained(eval_dir, raw_schema, project_root)
-                output_schema = _load_json(output_schema_path)
-            except ConfigError as exc:
-                errors.append(str(exc))
+    if task_impl is not None:
+        validation = task_impl.validate_eval(evaluation, eval_dir, project_root, errors)
+        output_schema_path = validation.output_schema_path
+        output_schema = validation.output_schema
 
     arms = _require_list(evaluation.get("arms"), "eval.arms", errors)
     if not arms:
@@ -274,7 +261,7 @@ def _validate_eval(
         arm_ids.add(arm_id)
         _required_string(arm, "description", f"eval.arms[{index}]", errors)
         prompts = _require_mapping(arm.get("prompts"), f"eval.arms[{index}].prompts", errors)
-        for role in ("system", "user"):
+        for role in task_impl.prompt_roles if task_impl else ():
             raw_prompt = prompts.get(role)
             if not isinstance(raw_prompt, str) or not raw_prompt:
                 errors.append(f"eval arm {arm_id or index} must define prompts.{role}")
@@ -326,28 +313,75 @@ def _validate_eval(
                 if isinstance(run.get("parameters"), dict):
                     merged_parameters.update(run["parameters"])
                 location = f"eval.runs[{index}] with arm {arm.get('id')!r}"
-                _validate_model_parameters(model, merged_parameters, location, errors)
+                if task_impl is not None:
+                    task_impl.validate_run_parameters(
+                        provider, model, merged_parameters, location, errors
+                    )
+                    _validate_task_capabilities(task_impl, model, location, errors)
 
     evaluation_block = _require_mapping(
         evaluation.get("evaluation"), "eval.evaluation", errors
     )
     _reject_unknown(
         evaluation_block,
-        {"mechanical", "model_judges", "human_review"},
+        {"mechanical", "model_judges", "human_review", "acceptance"},
         "eval.evaluation",
         errors,
     )
     mechanical = _require_list(
         evaluation_block.get("mechanical"), "eval.evaluation.mechanical", errors
     )
-    for scorer in mechanical:
-        if scorer not in MECHANICAL_SCORERS:
-            errors.append(f"Unknown mechanical scorer: {scorer!r}")
+    for scorer_index, scorer in enumerate(mechanical):
+        parsed = parse_mechanical_entry(scorer)
+        if parsed is None:
+            errors.append(
+                f"eval.evaluation.mechanical[{scorer_index}] must be a scorer name or a "
+                "single-key mapping of scorer name to parameters"
+            )
+            continue
+        scorer_name, scorer_params = parsed
+        if task_impl is None:
+            continue
+        if scorer_name not in task_impl.mechanical_scorers:
+            errors.append(f"Unknown mechanical scorer: {scorer_name!r}")
+        else:
+            task_impl.validate_mechanical(
+                scorer_name,
+                scorer_params,
+                f"eval.evaluation.mechanical[{scorer_index}] ({scorer_name})",
+                errors,
+            )
     if evaluation_block.get("model_judges"):
-        errors.append("model_judges are not implemented in Tamesu 0.1")
-    human_review = evaluation_block.get("human_review")
-    if isinstance(human_review, dict) and human_review.get("required"):
-        errors.append("required human review is not implemented in Tamesu 0.1")
+        if task_impl is not None and not task_impl.supports_judges:
+            errors.append(f"model_judges are not supported by task {task_impl.name!r}")
+        else:
+            from .policy import validate_model_judges
+
+            validate_model_judges(
+                evaluation_block["model_judges"],
+                defaults=defaults,
+                eval_dir=eval_dir,
+                project_root=project_root,
+                errors=errors,
+            )
+    if task_impl is not None and (
+        evaluation_block.get("human_review") or evaluation_block.get("acceptance")
+    ):
+        if not task_impl.supports_review:
+            errors.append(
+                f"human_review and acceptance are not supported by task {task_impl.name!r}"
+            )
+        else:
+            from .policy import validate_acceptance, validate_human_review
+
+            if evaluation_block.get("human_review"):
+                validate_human_review(
+                    evaluation_block["human_review"],
+                    eval_dir=eval_dir,
+                    project_root=project_root,
+                    errors=errors,
+                )
+            validate_acceptance(evaluation_block, errors)
 
     metrics = _require_mapping(evaluation.get("metrics"), "eval.metrics", errors)
     _reject_unknown(metrics, {"primary", "secondary"}, "eval.metrics", errors)
@@ -355,13 +389,32 @@ def _validate_eval(
     secondary = metrics.get("secondary", [])
     secondary_values = _require_list(secondary, "eval.metrics.secondary", errors)
     for metric in [primary, *secondary_values]:
-        if metric and metric not in BUILT_IN_METRICS:
+        if metric and task_impl is not None and metric not in task_impl.built_in_metrics:
             errors.append(f"Unknown metric: {metric!r}")
 
     item_ids = [item.get("id") for item in dataset.get("items", []) if isinstance(item, dict)]
     if len(item_ids) != len(set(item_ids)):
         errors.append("dataset items must have unique IDs")
     return output_schema_path, output_schema
+
+
+def _validate_task_capabilities(
+    task: Any, model: str, location: str, errors: list[str]
+) -> None:
+    spec = registered(model)
+    if spec is None:
+        if "text_output" not in task.required_capabilities:
+            errors.append(
+                f"{location}: model {model!r} is not registered; task {task.name!r} "
+                "needs a registered model so its capabilities and pricing are known"
+            )
+        return
+    missing = sorted(task.required_capabilities - spec.capabilities)
+    if missing:
+        errors.append(
+            f"{location}: model {model!r} lacks capabilities required by "
+            f"{task.name!r}: {', '.join(missing)}"
+        )
 
 
 def _validate_model_parameters(

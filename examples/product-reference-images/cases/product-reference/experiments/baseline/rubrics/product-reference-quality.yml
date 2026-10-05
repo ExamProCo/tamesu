@@ -1,0 +1,20 @@
+schema_version: 1
+name: product-reference-quality
+rationale: product-reference-quality.md
+dimensions:
+  - id: single-product-composition
+    question: >
+      Exactly one complete product is shown, isolated, fully in frame, from roughly a
+      front three-quarter view, on an uncluttered background.
+    reason_codes: [multiple-products, cropped, wrong-viewpoint, background-clutter]
+  - id: matches-brief
+    question: >
+      The product is the kind of object the brief describes, with its stated colors,
+      materials, and features.
+    reason_codes: [wrong-object, wrong-colors-or-materials, missing-features]
+  - id: fictional-branding
+    question: >
+      No real brand, logo, trademark, or look-alike of one appears; any text is invented.
+    reason_codes: [real-brand, logo-lookalike]
+acceptance:
+  rule: all_dimensions_pass

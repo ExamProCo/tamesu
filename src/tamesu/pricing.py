@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import json
-import math
 from dataclasses import dataclass
 
 from .models import Plan, RunSpec
 from .planner import items_by_id
-from .providers.models import estimate_cost, max_tokens_for, registered
-from .tasks.structured_text import render_prompts
+from .tasks import task_for
 
 
 @dataclass(frozen=True)
@@ -30,40 +27,25 @@ class RecordedCost:
 def estimate_plan_cost(plan: Plan, specs: tuple[RunSpec, ...] | None = None) -> PlanCost:
     selected = plan.owed_specs if specs is None else specs
     item_map = items_by_id(plan.context)
-    schema_text = json.dumps(plan.context.output_schema or {}, separators=(",", ":"))
+    task = task_for(plan.context.evaluation, plan.context.case)
     estimated = 0.0
     maximum = 0.0
     unknown: set[str] = set()
 
     for spec in selected:
-        model_spec = registered(spec.model)
-        if (
-            model_spec is None
-            or model_spec.input_usd_per_million is None
-            or model_spec.output_usd_per_million is None
-        ):
-            unknown.add(spec.model)
-            continue
-        token_cap = int(
-            spec.parameters.get(
-                "max_tokens",
-                spec.parameters.get("max_output_tokens", max_tokens_for(spec.model)),
-            )
-        )
         attempts = spec.retries + 1
+        spec_estimated = 0.0
+        spec_maximum = 0.0
         for item_id in spec.item_ids:
-            item = item_map[item_id]
-            system_prompt, user_prompt = render_prompts(spec.prompts, item)
-            input_tokens = _token_estimate(system_prompt + user_prompt + schema_text)
-            expected_text = json.dumps(item.get("expected", {}), separators=(",", ":"))
-            expected_output_tokens = max(32, _token_estimate(expected_text) * 2)
-            estimated_call = estimate_cost(
-                spec.model, input_tokens, min(token_cap, expected_output_tokens)
-            )
-            maximum_call = estimate_cost(spec.model, input_tokens, token_cap)
-            assert estimated_call is not None and maximum_call is not None
-            estimated += estimated_call
-            maximum += maximum_call * attempts
+            per_call = task.estimate_item_cost(plan.context, spec, item_map[item_id])
+            if per_call is None:
+                unknown.add(spec.model)
+                break
+            spec_estimated += per_call[0]
+            spec_maximum += per_call[1] * attempts
+        else:
+            estimated += spec_estimated
+            maximum += spec_maximum
 
     return PlanCost(
         estimated_usd=round(estimated, 6),
@@ -90,7 +72,3 @@ def recorded_cost(plan: Plan) -> RecordedCost:
         else:
             unknown += 1
     return RecordedCost(known_usd=round(known, 6), unknown_runs=unknown)
-
-
-def _token_estimate(text: str) -> int:
-    return max(1, math.ceil(len(text.encode("utf-8")) / 4))

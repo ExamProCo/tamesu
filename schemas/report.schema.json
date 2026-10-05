@@ -32,6 +32,7 @@
     },
     "metrics": {"type": "object"},
     "totals": {"type": "object"},
+    "evidence": {"type": "object"},
     "items": {"type": "array", "items": {"type": "object"}}
   }
 }

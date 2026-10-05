@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from . import __version__
-from .artifacts import write_text
+from .artifacts import write_text, write_yaml
 from .config import load_eval_context, load_eval_context_from_path, load_yaml
 from .discovery import (
     discover_eval_paths,
@@ -38,7 +38,7 @@ from .reporting import (
     status_summary,
 )
 from .runner import resume_run, run_eval
-from .scoring import rescore_run
+from .run_report import rescore_run
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,6 +79,43 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--limit-items", type=int, metavar="N")
     run_parser.add_argument("--force", action="store_true")
 
+    judge_parser = subparsers.add_parser(
+        "judge", help="Run model judges over stored images (paid; repeatable)."
+    )
+    judge_parser.add_argument("eval_id")
+    judge_parser.add_argument("--run", dest="run_id", help="Judge one run (default: banked runs).")
+    judge_parser.add_argument("--judge", dest="judge_id", help="Run only this declared judge.")
+    judge_parser.add_argument("--limit-items", type=int, help="Judge at most N items per run.")
+
+    promote_parser = subparsers.add_parser(
+        "promote", help="Copy accepted images into a new versioned dataset."
+    )
+    promote_parser.add_argument("eval_id")
+    promote_parser.add_argument(
+        "--to", required=True, metavar="CASE/DATASET", help="New dataset version, e.g. my-case/products-v2."
+    )
+    promote_parser.add_argument("--dry-run", action="store_true", help="Show what would be copied.")
+
+    review_parser = subparsers.add_parser(
+        "review", help="Export, import, and track blinded human review."
+    )
+    review_commands = review_parser.add_subparsers(dest="review_command", required=True)
+    review_export = review_commands.add_parser("export", help="Write a blinded review pack.")
+    review_export.add_argument("eval_id")
+    review_export.add_argument("--run", dest="run_id", help="Export one run (default: banked runs).")
+    review_export.add_argument("--out", type=Path, required=True, help="Empty directory for the pack.")
+    review_export.add_argument("--reviewer", help="Prefill the reviewer ID in responses.yml.")
+    review_export.add_argument("--seed", type=int, help="Seed for the shuffle (default: random).")
+    review_export.add_argument(
+        "--all", dest="include_reviewed", action="store_true", help="Include images already reviewed."
+    )
+    review_import = review_commands.add_parser("import", help="Import a completed responses.yml.")
+    review_import.add_argument("eval_id")
+    review_import.add_argument("responses", type=Path)
+    review_status_parser = review_commands.add_parser("status", help="Show review progress.")
+    review_status_parser.add_argument("eval_id")
+    review_status_parser.add_argument("--run", dest="run_id")
+
     status_parser = subparsers.add_parser("status", help="Reconcile plan and evidence.")
     status_parser.add_argument("eval_id")
 
@@ -103,6 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     close_parser = subparsers.add_parser("close", help="Close a completed eval.")
     close_parser.add_argument("eval_id")
+    close_parser.add_argument(
+        "--allow-incomplete-review",
+        action="store_true",
+        help="Close an image eval although required judgments or reviews are missing "
+        "(recorded in closing.yml).",
+    )
 
     present_parser = subparsers.add_parser(
         "present", help="Render a case as a static HTML case study."
@@ -229,6 +272,18 @@ def dispatch(args: argparse.Namespace) -> int:
             limit_items=args.limit_items,
             force=args.force,
         )
+    if args.command == "judge":
+        return command_judge(
+            project_root,
+            args.eval_id,
+            run_id=args.run_id,
+            judge_id=args.judge_id,
+            limit_items=args.limit_items,
+        )
+    if args.command == "promote":
+        return command_promote(project_root, args.eval_id, args.to, dry_run=args.dry_run)
+    if args.command == "review":
+        return command_review(project_root, args)
     if args.command == "status":
         return command_status(project_root, args.eval_id)
     if args.command == "resume":
@@ -242,7 +297,9 @@ def dispatch(args: argparse.Namespace) -> int:
     if args.command == "report":
         return command_report(project_root, args.eval_id)
     if args.command == "close":
-        return command_close(project_root, args.eval_id)
+        return command_close(
+            project_root, args.eval_id, allow_incomplete_review=args.allow_incomplete_review
+        )
     if args.command == "present":
         case_dir = resolve_case(project_root, args.case)
         destination = present_case(case_dir, args.output)
@@ -332,7 +389,7 @@ def command_models(provider: str | None = None) -> int:
         raise TamesuError(f"Unknown provider: {provider}")
     print(
         "model\tprovider\tefforts\tinput_usd_per_million\t"
-        "output_usd_per_million\tmax_tokens"
+        "output_usd_per_million\tmax_tokens\tcapabilities\timage_pricing"
     )
     for model, spec in sorted(MODELS.items(), key=lambda item: (item[1].provider, item[0])):
         if provider and spec.provider != provider:
@@ -350,10 +407,29 @@ def command_models(provider: str | None = None) -> int:
         )
         print(
             f"{model}\t{spec.provider}\t{efforts}\t{input_rate}\t{output_rate}\t"
-            f"{spec.max_tokens}"
+            f"{spec.max_tokens}\t{','.join(sorted(spec.capabilities))}\t"
+            f"{_image_pricing_label(spec.image_pricing)}"
         )
     print(f"Pricing verified: {PRICING_VERIFIED_AT}")
     return 0
+
+
+def _image_pricing_label(pricing: Any) -> str:
+    from .providers.models import FlatImagePricing, ImageMatrixPricing, ImageTokenPricing
+
+    if pricing is None:
+        return "-"
+    if isinstance(pricing, FlatImagePricing):
+        return f"flat ${pricing.usd_per_image:g}/image"
+    if isinstance(pricing, ImageTokenPricing):
+        return (
+            f"tokens text-in ${pricing.text_input_usd_per_million:g}, image-in "
+            f"${pricing.image_input_usd_per_million:g}, image-out "
+            f"${pricing.image_output_usd_per_million:g} per M"
+        )
+    if isinstance(pricing, ImageMatrixPricing):
+        return f"matrix ({len(pricing.usd_per_image)} quality/size prices)"
+    return "unknown"
 
 
 def command_plan(project_root: Path, eval_id: str) -> int:
@@ -517,6 +593,95 @@ def command_run(
     return 0
 
 
+def command_judge(
+    project_root: Path,
+    eval_id: str,
+    *,
+    run_id: str | None,
+    judge_id: str | None,
+    limit_items: int | None,
+) -> int:
+    from .judging import judge_eval
+
+    context = load_eval_context(project_root, eval_id)
+    summary = judge_eval(context, run_id=run_id, judge_id=judge_id, limit_items=limit_items)
+    print(
+        f"Judged {summary.judged} call(s): {summary.ok} ok, {summary.failed} failed; "
+        f"cost_usd={summary.cost_usd:.6f}"
+        + (f" (+{summary.unknown_costs} unknown)" if summary.unknown_costs else "")
+    )
+    for run, item, reason in summary.skipped:
+        print(f"skipped\t{run}\t{item}\t{reason}")
+    if summary.failed:
+        print(
+            f"{summary.failed} judgment(s) did not produce a verdict; "
+            "generation results are unchanged. Re-run tamesu judge to try again.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def command_promote(project_root: Path, eval_id: str, to: str, *, dry_run: bool) -> int:
+    from .promote import execute_promotion, plan_promotion
+
+    context = load_eval_context(project_root, eval_id)
+    plan = plan_promotion(context, to)
+    verb = "Would copy" if dry_run else "Copying"
+    print(f"{verb} {len(plan.copies)} image(s) into {plan.destination.relative_to(context.project_root)}:")
+    for source, target in plan.copies:
+        print(f"  {source.relative_to(context.project_root)} -> images/{target.name}")
+    for item, run, reason in plan.excluded:
+        print(f"excluded\t{item}\t{run}\t{reason}")
+    for product in plan.unpromoted_products:
+        print(f"no-accepted-image\t{product}")
+    if dry_run:
+        print("Dry run: nothing was written.")
+        return 0
+    execute_promotion(context, plan)
+    print(f"Created dataset {plan.dataset['name']} with {len(plan.dataset['items'])} item(s).")
+    return 0
+
+
+def command_review(project_root: Path, args: argparse.Namespace) -> int:
+    from .review import export_pack, import_responses, review_status
+
+    context = load_eval_context(project_root, args.eval_id)
+    if args.review_command == "export":
+        result = export_pack(
+            context,
+            args.out,
+            run_id=args.run_id,
+            reviewer=args.reviewer,
+            seed=args.seed,
+            include_reviewed=args.include_reviewed,
+        )
+        print(f"Exported {result.exported} image(s) to {result.out_dir} ({result.pack_id}).")
+        print(f"Key (keep it away from reviewers): {result.key_path}")
+        for run, item, reason in result.skipped:
+            print(f"skipped\t{run}\t{item}\t{reason}")
+        for warning in result.warnings:
+            print(f"warning: {warning}", file=sys.stderr)
+        return 0
+    if args.review_command == "import":
+        result = import_responses(context, args.responses)
+        print(
+            f"Imported {len(result.written)} review(s) from {result.reviewer} for {result.pack_id}"
+            + (f"; {result.skipped_blank} blank row(s) left owed." if result.skipped_blank else ".")
+        )
+        return 0
+    status = review_status(context, args.run_id)
+    print(f"Required reviews per item: {status['required_reviews_per_item']}")
+    print(f"Reviewed: {status['reviewed']}  Awaiting review: {status['awaiting_review']}")
+    if status["stale_records"]:
+        print(f"Stale review records (image or rubric changed): {status['stale_records']}")
+    for item in status["items"]:
+        print(f"{item['run_id']}\t{item['item_id']}\treviews={item['reviews']}\towed={item['owed']}")
+    for run, item, reason in status["skipped"]:
+        print(f"skipped\t{run}\t{item}\t{reason}")
+    return 0
+
+
 def command_status(project_root: Path, eval_id: str) -> int:
     plan = build_plan(load_eval_context(project_root, eval_id))
     summary = status_summary(plan)
@@ -525,7 +690,39 @@ def command_status(project_root: Path, eval_id: str) -> int:
         print(f"{key.capitalize()}: {counts[key]}")
     for run in summary["runs"]:
         print(f"{run['classification']}\t{run['run_id']}\t{run['state']}")
+    _print_image_owed_work(plan)
     return 0
+
+
+def _print_image_owed_work(plan: Any) -> None:
+    """Owed post-generation work and stale evidence, for image evals only."""
+    from .tasks import task_for
+
+    context = plan.context
+    if not task_for(context.evaluation, context.case).supports_review:
+        return
+    from .acceptance import run_evidence
+
+    for run_id in sorted(plan.banked_run_ids.values()):
+        evidence = run_evidence(context, context.eval_dir / "runs" / run_id)
+        counts, columns = evidence["counts"], evidence["columns"]
+        parts = [
+            f"accepted={counts['accepted']}",
+            f"rejected={counts['rejected']}",
+            f"pending={counts['pending']}",
+        ]
+        if context.evaluation["evaluation"].get("model_judges"):
+            judge = columns["model_judge"]
+            parts.append(f"awaiting_judgment={judge['of_generated'] - judge['judged']}")
+        if context.evaluation["evaluation"].get("human_review"):
+            parts.append(f"awaiting_review={evidence['review']['owed_reviews']}")
+        stale = counts["stale_images"] + counts["stale_judgments"] + counts["stale_reviews"]
+        if stale:
+            parts.append(
+                f"stale_evidence={stale} (images={counts['stale_images']}, "
+                f"judgments={counts['stale_judgments']}, reviews={counts['stale_reviews']})"
+            )
+        print(f"evidence\t{run_id}\t" + " ".join(parts))
 
 
 def command_resume(project_root: Path, run_id: str) -> int:
@@ -586,7 +783,9 @@ def command_report(project_root: Path, eval_id: str) -> int:
     return 0
 
 
-def command_close(project_root: Path, eval_id: str) -> int:
+def command_close(
+    project_root: Path, eval_id: str, *, allow_incomplete_review: bool = False
+) -> int:
     context = load_eval_context(project_root, eval_id)
     if context.evaluation["status"] == "complete":
         print(f"{eval_id} is already complete.")
@@ -596,9 +795,12 @@ def command_close(project_root: Path, eval_id: str) -> int:
         raise TamesuError(
             f"Cannot close {eval_id}: {len(plan.owed_specs)} planned run(s) are still owed."
         )
+    closing = _close_review_gate(context, plan, allow_incomplete_review)
     for run_id in plan.banked_run_ids.values():
         if not (context.eval_dir / "runs" / run_id / "report.yml").is_file():
             raise TamesuError(f"Cannot close {eval_id}: run {run_id} has no report.yml.")
+    if closing is not None:
+        write_yaml(context.eval_dir / "closing.yml", closing)
 
     eval_path = context.eval_dir / "eval.yml"
     source = eval_path.read_text(encoding="utf-8")
@@ -616,14 +818,63 @@ def command_close(project_root: Path, eval_id: str) -> int:
     return 0
 
 
+def _close_review_gate(context: Any, plan: Any, allow_incomplete: bool) -> dict[str, Any] | None:
+    """For image evals: refuse to close while required judgments or reviews are missing."""
+    from .tasks import task_for
+
+    if not task_for(context.evaluation, context.case).supports_review:
+        return None
+    from .acceptance import run_evidence
+    from datetime import UTC, datetime
+
+    runs: dict[str, Any] = {}
+    owed = 0
+    for run_id in sorted(plan.banked_run_ids.values()):
+        run_dir = context.eval_dir / "runs" / run_id
+        evidence = run_evidence(context, run_dir)
+        counts = evidence["counts"]
+        stale = counts["stale_images"] + counts["stale_judgments"] + counts["stale_reviews"]
+        runs[run_id] = {
+            "accepted": counts["accepted"],
+            "rejected": counts["rejected"],
+            "pending": counts["pending"],
+            "owed_reviews": evidence["review"]["owed_reviews"],
+            "stale_evidence_records": stale,
+        }
+        owed += counts["pending"]
+    if owed and not allow_incomplete:
+        lines = [
+            f"- {run_id}: {info['pending']} item(s) pending "
+            f"({info['owed_reviews']} review(s) owed)"
+            for run_id, info in runs.items()
+            if info["pending"]
+        ]
+        raise TamesuError(
+            f"Cannot close {context.eval_id}: required evidence is missing.\n"
+            + "\n".join(lines)
+            + "\nImport the missing reviews or judgments, or pass --allow-incomplete-review "
+            "to close anyway (the gap is recorded in closing.yml)."
+        )
+    return {
+        "schema_version": 1,
+        "eval_id": context.eval_id,
+        "closed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "allow_incomplete_review": bool(allow_incomplete),
+        "incomplete_evidence": bool(owed),
+        "pending_items": owed,
+        "runs": runs,
+    }
+
+
 def _render_all_prompts(context: Any) -> None:
     from .planner import build_plan, items_by_id
-    from .tasks.structured_text import render_prompts
+    from .tasks import task_for
 
+    task = task_for(context.evaluation, context.case)
     item_map = items_by_id(context)
     for spec in build_plan(context).specs:
         for item_id in spec.item_ids:
-            render_prompts(spec.prompts, item_map[item_id])
+            task.render_prompts(spec.prompts, item_map[item_id])
 
 
 def _is_within(path: Path, parent: Path) -> bool:

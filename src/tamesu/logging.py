@@ -111,6 +111,11 @@ def redact_value(value: Any, *, secret_values: Iterable[str] = ()) -> Any:
     return _redact(value, secrets)
 
 
+def redact_with_environment(value: Any) -> Any:
+    """Redact a value using key/URL rules plus secrets found in the process environment."""
+    return redact_value(value, secret_values=_environment_secrets())
+
+
 def _redact(value: Any, secrets: tuple[str, ...]) -> Any:
     if isinstance(value, Mapping):
         redacted: dict[str, Any] = {}

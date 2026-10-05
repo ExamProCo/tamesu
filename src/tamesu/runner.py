@@ -9,18 +9,18 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .artifacts import write_json, write_text, write_yaml
+from .artifacts import write_yaml
 from .config import load_yaml
 from .discovery import find_run_dir
 from .errors import ExecutionError, ProviderError
-from .identity import digest_bytes, digest_file, digest_value
+from .identity import digest_file
 from .logging import CallLogWriter
 from .models import EvalContext, RunSpec
 from .planner import build_plan, items_by_id, limit_spec
 from .providers import get_provider
 from .pricing import estimate_plan_cost, recorded_cost
-from .scoring import build_report, score_output
-from .tasks.structured_text import render_prompts
+from .run_report import build_report
+from .tasks import task_for
 
 
 def run_eval(
@@ -324,8 +324,9 @@ def _process_item(
             return previous
 
     starting_attempts = int(previous.get("attempts", 0)) if previous else 0
+    task = task_for(context.evaluation, context.case)
     try:
-        system_prompt, user_prompt = render_prompts(spec.prompts, item)
+        prepared = task.prepare(context, spec, item)
     except Exception as exc:
         safe_message = log.safe_text(exc)
         result = {
@@ -343,12 +344,7 @@ def _process_item(
         _log_item_terminal(context, run_id, item_id, result_path, result, log)
         return result
 
-    prompt_metadata = {
-        "system_sha256": digest_bytes(system_prompt.encode("utf-8")),
-        "user_sha256": digest_bytes(user_prompt.encode("utf-8")),
-        "output_schema_sha256": digest_value(context.output_schema or {}),
-        "parameters_sha256": digest_value(spec.parameters),
-    }
+    prompt_metadata = prepared.request_metadata
 
     final_error: ProviderError | None = None
     response = None
@@ -359,14 +355,7 @@ def _process_item(
         total_attempts = attempt
         attempt_started = time.monotonic()
         try:
-            response = provider.generate_text(
-                model=spec.model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                output_schema=context.output_schema or {},
-                parameters=spec.parameters,
-                timeout_seconds=spec.timeout_seconds,
-            )
+            response = task.call_provider(provider, context, spec, prepared)
             latency_ms = round((time.monotonic() - attempt_started) * 1000)
             log.append(
                 "provider_attempt",
@@ -460,10 +449,7 @@ def _process_item(
                 "cost_usd": final_error.cost_usd,
                 "response_metadata": log.redact(final_error.response_metadata),
             },
-            "prompt": {
-                "system_sha256": prompt_metadata["system_sha256"],
-                "user_sha256": prompt_metadata["user_sha256"],
-            },
+            "prompt": dict(prepared.prompt_hashes),
             "error": {
                 "type": type(final_error).__name__,
                 "message": str(final_error),
@@ -476,45 +462,13 @@ def _process_item(
         _log_item_terminal(context, run_id, item_id, result_path, result, log)
         return result
 
-    raw_path = item_dir / "output.txt"
-    write_text(raw_path, response.text)
-    parsed, scores = score_output(
-        response.text,
-        expected=item.get("expected"),
-        output_schema=context.output_schema or {},
-    )
-    output_path = raw_path
-    media_type = "text/plain"
-    if parsed is not None:
-        output_path = item_dir / "output.json"
-        write_json(output_path, parsed)
-        media_type = "application/json"
-
-    artifacts = [
-        {
-            "role": "raw_provider_output",
-            "path": raw_path.relative_to(context.eval_dir).as_posix(),
-            "sha256": digest_file(raw_path),
-            "media_type": "text/plain",
-        }
-    ]
-    if output_path != raw_path:
-        artifacts.append(
-            {
-                "role": "task_output",
-                "path": output_path.relative_to(context.eval_dir).as_posix(),
-                "sha256": digest_file(output_path),
-                "media_type": media_type,
-            }
-        )
-    else:
-        artifacts[0]["role"] = "task_output"
+    materialized = task.materialize(context, spec, item, item_dir, response)
     log.append(
         "artifacts_written",
         at=_utc_now(),
         run_id=run_id,
         item_id=item_id,
-        artifacts=artifacts,
+        artifacts=materialized.artifacts,
     )
 
     result = {
@@ -522,11 +476,7 @@ def _process_item(
         "item_id": item_id,
         "state": "complete",
         "attempts": total_attempts,
-        "output": {
-            "path": output_path.name,
-            "sha256": digest_file(output_path),
-            "media_type": media_type,
-        },
+        **materialized.result_fields,
         "generation": {
             "provider_request_id": response.request_id,
             "latency_ms": latency_ms,
@@ -534,11 +484,7 @@ def _process_item(
             "cost_usd": response.cost_usd,
             "response_metadata": log.redact(response.response_metadata),
         },
-        "prompt": {
-            "system_sha256": prompt_metadata["system_sha256"],
-            "user_sha256": prompt_metadata["user_sha256"],
-        },
-        "mechanical_scores": scores,
+        "prompt": dict(prepared.prompt_hashes),
     }
     write_yaml(result_path, result)
     _log_item_terminal(context, run_id, item_id, result_path, result, log)

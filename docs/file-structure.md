@@ -187,6 +187,9 @@ evals/
     ├── analysis.md
     ├── evaluation-report.md
     ├── leaderboard.md
+    ├── closing.yml                 # image evals: written by tamesu close
+    ├── review/
+    │   └── keys/<pack-id>.yml      # presentation-ID key; never give it to reviewers
     ├── logs/
     │   └── <run-id>.jsonl
     └── runs/
@@ -196,8 +199,12 @@ evals/
             └── items/
                 └── <item-id>/
                     ├── result.yml
-                    ├── generated.png
-                    └── judge.yml
+                    ├── output-0001.png          # image_generation task output
+                    ├── provider_response.yml    # revised prompt, request ID, redacted metadata
+                    ├── judgments/
+                    │   └── <judge-id>--<rubric-sha8>--0001.yml   # immutable
+                    └── reviews/
+                        └── <reviewer>--<timestamp>.yml           # immutable
 ```
 
 ### `eval.yml`
@@ -277,6 +284,19 @@ provider request ID, attempts, latency, usage, cost, and mechanical scores.
 Large outputs are stored once as standalone files. Binary data must not be embedded in
 YAML or JSONL.
 
+For `image_generation`, the final image is `output-0001.<ext>` (the extension follows the
+decoded content, not a provider claim). `result.yml` adds `outcome` (`generated`,
+`safety_filtered`, or `invalid_artifact`, with a stable reason code), `artifacts[]` with
+checksums and dimensions, and `mechanical_scores`. A safety refusal or an undecodable image
+is a complete, measured outcome that stays in every denominator; only transport and
+framework failures leave an item failed. An undecodable payload is kept as
+`invalid-0001.bin` for diagnosis. `provider_response.yml` holds normalized, redacted
+metadata only: never base64 payloads, signed URLs, or authorization data.
+
+The image checksum is the join key for every later record. Each judgment and review stores
+the `image_sha256` it saw (and the rubric fingerprint); a record that no longer matches the
+file or rubric is reported as stale rather than trusted.
+
 ### `report.yml`
 
 The report is derived from stored artifacts. It contains completion counts, aggregate and
@@ -346,7 +366,10 @@ Do not commit:
 - credentials or populated environment files;
 - caches, temporary files, or interrupted writes;
 - provider SDK caches;
-- large generated artifacts when the repository uses external artifact storage.
+- large generated artifacts when the repository uses external artifact storage. Generated
+  images under `runs/*/items/*/output-*` and `invalid-*.bin` can add up quickly; track them
+  with Git LFS or DVC (or ignore them) before the first real image run, for example
+  `git lfs track "**/runs/*/items/*/output-*"`. Keep the checksums in `result.yml`.
 
 When generated artifacts are stored externally, their metadata must retain a stable
 location, media type, size, and content checksum. A report without its referenced evidence

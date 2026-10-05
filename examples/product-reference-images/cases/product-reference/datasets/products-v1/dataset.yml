@@ -1,0 +1,28 @@
+schema_version: 1
+name: products-v1
+description: Three fictional product briefs. Every name and feature is invented.
+
+items:
+  - id: hearthwick-kettle
+    input:
+      name: Hearthwick stovetop kettle
+      description: >
+        a stovetop kettle in matte sage-green enamel with a copper handle and a
+        round brass lid knob
+    expected: {}
+
+  - id: tidepool-lantern
+    input:
+      name: Tidepool camping lantern
+      description: >
+        a cylindrical camping lantern with a frosted blue glass shade, a black metal
+        cage, and a folding carry handle
+    expected: {}
+
+  - id: juniper-satchel
+    input:
+      name: Juniper waxed-canvas satchel
+      description: >
+        a small waxed-canvas satchel in forest green with a tan leather flap and two
+        brass buckles
+    expected: {}

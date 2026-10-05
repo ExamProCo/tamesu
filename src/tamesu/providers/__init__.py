@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from .anthropic import AnthropicProvider
-from .base import Provider
+from .base import (
+    ImageGenerationProvider,
+    Provider,
+    StructuredMultimodalProvider,
+    TextGenerationProvider,
+)
 from .bedrock import BedrockProvider
 from .gemini import GeminiProvider
 from .meta import MetaProvider
@@ -24,4 +29,10 @@ def get_provider(name: str) -> Provider:
     return provider_type()
 
 
-__all__ = ["Provider", "get_provider"]
+__all__ = [
+    "ImageGenerationProvider",
+    "Provider",
+    "StructuredMultimodalProvider",
+    "TextGenerationProvider",
+    "get_provider",
+]

@@ -86,6 +86,55 @@ larger cap or a lower `effort` when a response ends with `finish_reason: length`
 All adapters return text to the structured-text task, which then parses JSON and applies
 the same local schema and exact-match scoring regardless of provider.
 
+## Capabilities
+
+A provider adapter declares identity and credentials; what it can do is a separate
+capability, and each registered model lists its capabilities (`text_output`,
+`structured_output`, `image_input`, `image_output`). Lint checks the selected model's
+capability for the task, so one provider can serve text-only and image-capable models.
+
+| Capability | Used by | Adapters |
+|---|---|---|
+| text generation | `structured_text` | all |
+| image generation | `image_generation` | `meta` (`muse-image-1.0`), `openai` (`gpt-image-2`, `gpt-image-2.5-sunburst`, `gpt-image-2.5-flare`) |
+| multimodal structured output | model judges | `meta` (`muse-spark-1.1`/`1.2`/`1.3`) |
+
+### Image generation parameters
+
+Common fields live under `parameters.image` (`size` as `WIDTHxHEIGHT`, `output_format` as
+`png`/`jpeg`/`webp`, `count`, which must be `1`). Everything provider-specific lives under
+`parameters.provider_options`, and each adapter validates its own options at plan time,
+before credentials or any paid call:
+
+| Provider | `provider_options` |
+|---|---|
+| `meta` | `reasoning_strength` (`high`/`low`), `tool_enablement` (`enable_image_search`, `enable_web_search`, `enable_shell` booleans) |
+| `openai` | `quality`, `background`, `output_compression` (jpeg/webp), `moderation` |
+
+An option valid for one provider is rejected by the other. Meta image models can use web
+search, image search, and shell; an eval that needs fictional output should switch all
+three off explicitly. They are not global defaults.
+
+Adapters request inline base64 bytes with `n: 1` and never fetch provider URLs. The decoded
+bytes are authoritative: a provider's claimed media type is recorded beside the detected
+one if they disagree. Revised prompts and the requested and returned model IDs are
+recorded. A provider refusal (an empty result or a moderation/safety `400`) becomes a
+`safety_filtered` outcome rather than a failure; a plain `400` stays a non-retryable error.
+
+### Image pricing
+
+Pricing is a strategy chosen per model, not a field every provider shares:
+
+- **flat per image** (`muse-image-1.0`, $0.01 per generated image): plans are exact, and
+  failed or filtered requests are billed nothing, so confirmed refusals record `$0`;
+- **token billed** (OpenAI `gpt-image-*`, $5 text input, $8 image input, $30 image output
+  per million tokens): the recorded cost is exact from reported usage, but a plan cannot
+  predict output tokens for a quality and size, so the estimate is reported as unknown;
+- **quality/size matrix**: available for models that publish per-image prices.
+
+An unpriced model or parameter combination stays unknown. It is never coerced to zero or
+priced with another provider's strategy.
+
 ## Cost and budgets
 
 `tamesu plan` reports recorded cost, expected remaining cost, and maximum additional
