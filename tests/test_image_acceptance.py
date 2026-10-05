@@ -314,3 +314,112 @@ class ReportTests(unittest.TestCase):
         self.assertIn("[image](runs/", text)
         self.assertIn("[judgment](runs/", text)
         self.assertIn("[review](runs/", text)
+
+
+class ObservedOutcomeTests(unittest.TestCase):
+    def test_small_gap_is_stated_in_counts_and_called_inconclusive(self) -> None:
+        from tamesu.reporting import image_outcome
+
+        summary, caveat = image_outcome(
+            {
+                ("gpt-image-2", "studio"): {"accepted": 3, "planned": 3, "pending": 0},
+                ("muse-image-1.0", "studio"): {"accepted": 2, "planned": 3, "pending": 0},
+            }
+        )
+        self.assertIn("3 of 3 images accepted (100.0%)", summary)
+        self.assertIn("2 of 3 images accepted (66.7%)", summary)
+        self.assertNotIn("higher", summary)
+        self.assertIn("within what a single image can change", caveat)
+        self.assertIn("does not show that either row is better", caveat)
+
+    def test_equal_rows_and_pending_reviews(self) -> None:
+        from tamesu.reporting import image_outcome
+
+        summary, caveat = image_outcome(
+            {("a", "x"): {"accepted": 1, "planned": 3, "pending": 2}, ("b", "x"): {"accepted": 1, "planned": 3, "pending": 2}}
+        )
+        self.assertIn("accepted the same share", summary)
+        self.assertIn("4 image(s) still await required review", caveat)
+        self.assertNotIn("single image", caveat)
+
+    def test_large_samples_with_a_big_gap_get_no_small_sample_warning(self) -> None:
+        from tamesu.reporting import image_outcome
+
+        _, caveat = image_outcome(
+            {("a", "x"): {"accepted": 45, "planned": 50, "pending": 0}, ("b", "x"): {"accepted": 30, "planned": 50, "pending": 0}}
+        )
+        self.assertNotIn("single image", caveat)
+
+    def test_report_and_present_use_the_image_wording(self) -> None:
+        from tamesu.planner import build_plan
+        from tamesu.presenting import build_case_data
+        from tamesu.reporting import build_evaluation_report
+
+        harness = Harness(self, review=True)
+        harness.review({GOOD: True, BAD: False})
+        text = build_evaluation_report(build_plan(harness.context)).read_text()
+        self.assertIn("1 of 2 images accepted (50.0%)", text)
+        self.assertIn("a single image changes this result by 50.0 percentage points", text)
+        data = build_case_data(harness.context.case_dir)
+        outcome = data["experiments"][0]["evals"][0]["observed_outcome"]
+        self.assertIn("1 of 2 images accepted", outcome["summary"])
+        self.assertIn("single image", outcome["caveat"])
+
+
+class AnalysisAutomationTests(unittest.TestCase):
+    """analysis.md needs no commands: it appears, stays current, and is stamped at close."""
+
+    def evaluation(self, harness):
+        from tamesu.presenting import build_case_data
+
+        return build_case_data(harness.context.case_dir)["experiments"][0]["evals"][0]
+
+    def test_file_appears_after_generation_and_facts_follow_new_evidence(self) -> None:
+        harness = Harness(self, review=True, judges=True, judge_role="screen")
+        path = harness.context.eval_dir / "analysis.md"
+        self.assertTrue(path.is_file())  # created by `run`, no command needed
+        text = path.read_text()
+        self.assertIn("## Answer to the technical uncertainty", text)
+        self.assertIn("0 accepted, 0 rejected, 2 pending", text)
+        self.assertNotIn("evidence_digest", text)  # not stamped before close
+
+        path.write_text(path.read_text().replace(
+            "TODO: answer that in two or three sentences", "gpt-style answer: my own words, TODO: answer that in two or three sentences"
+        ))
+        judge_eval(harness.context)
+        self.assertIn("Model judge failed `single-product-composition`", path.read_text())
+        harness.review({GOOD: True, BAD: False})
+        text = path.read_text()
+        self.assertIn("1 accepted, 1 rejected, 0 pending", text)
+        self.assertIn("my own words", text)  # the author's prose is never rewritten
+        self.assertEqual(text.count("### Evidence at a glance"), 1)
+        self.assertIn("## What remains uncertain", text)  # content after the section survives
+
+    def test_close_stamps_it_and_new_evidence_afterwards_is_flagged(self) -> None:
+        harness = Harness(self, review=True)
+        harness.review({GOOD: True, BAD: False})
+        path = harness.context.eval_dir / "analysis.md"
+        path.write_text(path.read_text().replace("TODO", "Done"))
+        self.assertIn("not verified", self.evaluation(harness)["analysis"]["label"])
+        command_close(harness.project.root, EVAL_ID)
+        self.assertTrue(path.read_text().startswith("---\nevidence_digest: sha256:"))
+        label = self.evaluation(harness)["analysis"]
+        self.assertTrue(label["matches_evidence"])
+        self.assertEqual(label["label"], "Analysis, matches the shown evidence")
+        harness.review({GOOD: False, BAD: False}, reviewer="bea")  # evidence changes after closing
+        self.assertFalse(self.evaluation(harness)["analysis"]["matches_evidence"])
+
+    def test_unfinished_todo_lines_are_labelled_a_draft(self) -> None:
+        harness = Harness(self, review=True)
+        harness.review({GOOD: True, BAD: False})
+        command_close(harness.project.root, EVAL_ID)  # stamps even with TODOs present
+        self.assertEqual(
+            self.evaluation(harness)["analysis"]["label"], "Draft analysis: unfinished (TODO lines remain)"
+        )
+
+    def test_a_removed_facts_section_is_respected_and_text_evals_get_no_file(self) -> None:
+        harness = Harness(self, review=True)
+        path = harness.context.eval_dir / "analysis.md"
+        path.write_text("My own complete write-up.\n")
+        harness.review({GOOD: True, BAD: False})
+        self.assertEqual(path.read_text(), "My own complete write-up.\n")

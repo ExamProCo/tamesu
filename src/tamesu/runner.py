@@ -19,7 +19,7 @@ from .models import EvalContext, RunSpec
 from .planner import build_plan, items_by_id, limit_spec
 from .providers import get_provider
 from .pricing import estimate_plan_cost, recorded_cost
-from .run_report import build_report
+from .run_report import build_report, sync_analysis_quietly
 from .tasks import task_for
 
 
@@ -208,6 +208,7 @@ def execute_spec(
     try:
         write_yaml(run_dir / "run.yml", manifest)
         build_report(context, run_dir, manifest)
+        sync_analysis_quietly(context)
         report_path = run_dir / "report.yml"
         log.append(
             "run_finished",

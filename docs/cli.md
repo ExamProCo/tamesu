@@ -424,7 +424,7 @@ Human review round-trips through files, so reviewers can use a spreadsheet, a st
 or any hosted tool.
 
 ```sh
-tamesu review export <eval-id> [--run RUN_ID] --out review-pack/ [--reviewer ID] [--seed N] [--all]
+tamesu review export <eval-id> [--run RUN_ID] --out review-pack/ [--reviewer ID] [--seed N] [--all] [--force]
 tamesu review import <eval-id> review-pack/responses.yml
 tamesu review status <eval-id> [--run RUN_ID]
 ```
@@ -434,7 +434,11 @@ order, the rubric dimensions, and a blank `responses.yml`. The mapping from pres
 ID back to run, item, and image checksum is written to `review/keys/<pack-id>.yml` inside
 the eval directory, outside the pack. Keep that key away from reviewers. A warning is
 printed when an image carries embedded metadata that could identify its generator. By
-default only images that still owe reviews are exported.
+default only images that still owe reviews are exported. Export refuses a non-empty `--out`;
+`--force` replaces an earlier review pack there (only a directory containing `pack.yml`, and
+only after the new export is known to succeed). Use it when you re-run an eval after editing
+a prompt or rubric. The old pack's key stays in `review/keys/`, and its `responses.yml` can
+no longer be imported.
 
 `import` validates everything first and writes nothing unless every response is valid:
 unknown presentation IDs, missing or unknown dimensions, reason codes outside the rubric,
@@ -443,6 +447,26 @@ template rows count as not yet reviewed. Each submission becomes an immutable
 `reviews/<reviewer>--<timestamp>.yml`; a second review by the same reviewer adds a record
 and the latest is current. `status` shows reviews owed, adjudications owed, and stale
 records.
+
+## `analysis.md`
+
+`analysis.md`, next to `eval.yml`, is where *you* write the interpretation `present` shows
+under "Conclusion and next experiments". There is no manifest field for it, and for image
+evals you do not run a command to get one:
+
+- **It appears by itself.** As soon as an image eval has a banked run, `run` writes a draft:
+  the case's technical uncertainty, TODO prompts for your answer, what remains uncertain, and
+  next experiments.
+- **Its facts stay current.** The "Evidence at a glance" section (counts, the small-sample
+  caveat, per-dimension failures, judge-vs-human agreement, cost) is rewritten after every
+  `run`, `judge`, and `review import`. Everything outside that section is yours and is never
+  touched. If you delete the section, Tamesu leaves the file alone.
+- **`close` stamps it.** Closing records the evidence digest in the front matter, so the page
+  can say "matches the shown evidence". If you import another review after closing, the page
+  flags the analysis as no longer matching. While TODO lines remain, it is labelled an
+  unfinished draft.
+
+Text evals do not get an automatic file; write one by hand if you want a conclusion section.
 
 ## `tamesu promote`
 

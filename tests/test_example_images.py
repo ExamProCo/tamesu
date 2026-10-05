@@ -14,6 +14,7 @@ from tamesu.cli import command_close, command_lint, command_promote
 from tamesu.config import load_eval_context, load_yaml
 from tamesu.judging import judge_eval
 from tamesu.planner import build_plan
+from tamesu.presenting import present_case
 from tamesu.pricing import estimate_plan_cost
 from tamesu.review import export_pack, import_responses
 from tamesu.runner import run_eval
@@ -35,7 +36,10 @@ class ProductReferenceExampleTests(unittest.TestCase):
         shutil.copytree(
             SOURCE,
             self.project,
-            ignore=shutil.ignore_patterns("runs", "logs", "review", "closing.yml", "*.md.bak"),
+            ignore=shutil.ignore_patterns(
+                "runs", "logs", "review", "review-pack*", "closing.yml", "leaderboard.md",
+                "evaluation-report.md", "analysis.md", "accepted-references-v1", "build", ".env",
+            ),
         )
         self.eval_path = (
             self.project / "cases/product-reference/experiments/baseline/evals/two-model-baseline/eval.yml"
@@ -81,6 +85,17 @@ class ProductReferenceExampleTests(unittest.TestCase):
             self.assertEqual(
                 command_promote(self.project, EVAL_ID, "product-reference/accepted-references-v1", dry_run=True), 0
             )
+
+            # tamesu present: the page must show the images and acceptance, not text-eval columns
+            destination = present_case(self.project / "cases/product-reference")
+            run_id = run_ids[0]
+            copied = sorted((destination / "assets" / "images" / run_id).glob("*.png"))
+            self.assertEqual(len(copied), 3)
+            page = (destination / "experiments" / "baseline.html").read_text()
+            self.assertIn(f"../assets/images/{run_id}/hearthwick-kettle.png", page)
+            self.assertIn("Accepted", page)
+            self.assertNotIn("Exact matches", page)
+            self.assertNotIn("No stored output", page)
 
 
 if __name__ == "__main__":

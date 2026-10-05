@@ -15,6 +15,7 @@ from .tasks.structured_text import validate_json_schema
 ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 ACCEPTANCE_RULES = {"all_dimensions_pass"}
 NO_REASON = "none"  # reason_code for a passing dimension; reserved, never a failure code
+OTHER_REASON = "other"  # an ordinary failure code, but a human must explain it in the notes
 
 
 @dataclass(frozen=True)

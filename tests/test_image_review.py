@@ -86,6 +86,11 @@ class ExportTests(ReviewBase):
             for needle in forbidden:
                 self.assertNotIn(needle, haystack, f"{needle!r} leaked via {path}")
 
+    def test_review_page_blocks_saving_a_fail_without_a_reason(self) -> None:
+        self.export()
+        page = (self.out / "review.html").read_text()
+        self.assertIn("Choose a reason for every fail", page)
+
     def test_review_page_is_self_contained_and_its_output_imports_unchanged(self) -> None:
         import json
 
@@ -155,6 +160,35 @@ class ExportTests(ReviewBase):
         self.assertIn("No images are owed review", str(caught.exception))
         self.export(out=self.project.root / "again-all", include_reviewed=True)
 
+    def test_force_replaces_an_earlier_pack_but_only_a_pack(self) -> None:
+        first = self.export(seed=1)
+        (self.out / "stale-note.txt").write_text("old")
+        with self.assertRaises(ExecutionError) as caught:
+            self.export(seed=2)
+        self.assertIn("--force", str(caught.exception))
+        second = self.export(seed=2, force=True)
+        self.assertNotEqual(first.pack_id, second.pack_id)
+        self.assertFalse((self.out / "stale-note.txt").exists())
+        self.assertEqual(load_yaml(self.out / "pack.yml")["pack_id"], second.pack_id)
+        self.assertTrue(first.key_path.is_file())  # the old key is kept
+
+        not_a_pack = self.project.root / "my-notes"
+        not_a_pack.mkdir()
+        (not_a_pack / "important.txt").write_text("keep me")
+        with self.assertRaises(ExecutionError) as caught:
+            self.export(out=not_a_pack, force=True)
+        self.assertIn("does not look like a review pack", str(caught.exception))
+        self.assertTrue((not_a_pack / "important.txt").exists())
+
+    def test_failed_forced_export_keeps_the_earlier_pack(self) -> None:
+        self.export()
+        self.fill()
+        import_responses(self.context, self.out / "responses.yml")  # nothing is owed any more
+        with self.assertRaises(ExecutionError):
+            self.export(force=True)
+        self.assertTrue((self.out / "pack.yml").is_file())
+        self.assertTrue((self.out / "images").is_dir())
+
     def test_embedded_generator_metadata_is_flagged(self) -> None:
         import io
 
@@ -205,6 +239,18 @@ class ImportTests(ReviewBase):
             with self.assertRaises(ReviewImportError, msg=name):
                 import_responses(self.context, path)
             self.assertEqual(list(self.run_dir.glob("items/*/reviews/*")), [], msg=name)
+
+    def test_fail_without_a_chosen_reason_says_so_plainly(self) -> None:
+        self.export()
+        path = self.fill()
+        document = yaml.safe_load(path.read_text())
+        document["responses"][0]["dimensions"]["fictional-packaging"] = {"pass": False, "reason_code": None}
+        path.write_text(yaml.safe_dump(document, sort_keys=False))
+        with self.assertRaises(ReviewImportError) as caught:
+            import_responses(self.context, path)
+        message = str(caught.exception)
+        self.assertIn("marked fail but no reason was chosen", message)
+        self.assertNotIn("None", message)
 
     def test_unknown_pack_and_missing_reviewer_are_rejected(self) -> None:
         self.export()
@@ -393,3 +439,33 @@ class AcceptanceLintTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OtherReasonTests(unittest.TestCase):
+    def test_other_requires_an_explanation_in_the_notes(self) -> None:
+        project = ImageProject(review=True)
+        project.__enter__()
+        self.addCleanup(project.__exit__, None, None, None)
+        project.rubric_path.write_text(
+            project.rubric_path.read_text().replace(
+                "reason_codes: [multiple-products, cropped]", "reason_codes: [multiple-products, cropped, other]"
+            )
+        )
+        context = load_eval_context(project.root, EVAL_ID)
+        run_eval(context)
+        out = project.root / "pack"
+        export_pack(context, out)
+        path = out / "responses.yml"
+        document = yaml.safe_load(path.read_text())
+        document["reviewer"] = "andrew"
+        for response in document["responses"]:
+            for outcome in response["dimensions"].values():
+                outcome.update({"pass": True, "reason_code": None})
+        document["responses"][0]["dimensions"]["single-product-composition"] = {"pass": False, "reason_code": "other"}
+        path.write_text(yaml.safe_dump(document, sort_keys=False))
+        with self.assertRaises(ReviewImportError) as caught:
+            import_responses(context, path)
+        self.assertIn("'other' on single-product-composition needs an explanation", str(caught.exception))
+        document["responses"][0]["notes"] = "image is a collage, not a photograph"
+        path.write_text(yaml.safe_dump(document, sort_keys=False))
+        self.assertEqual(len(import_responses(context, path).written), 2)

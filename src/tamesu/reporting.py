@@ -243,7 +243,11 @@ def build_evaluation_report(plan: Plan) -> Path:
             "evidence."
         )
     lines.append("")
-    lines.extend(_observed_result(rows, primary))
+    if _is_image_eval(plan):
+        summary, caveat = image_outcome(image_row_counts(plan))
+        lines.extend([summary, "", caveat])
+    else:
+        lines.extend(_observed_result(rows, primary))
 
     lines.extend(
         [
@@ -344,6 +348,80 @@ def build_evaluation_report(plan: Plan) -> Path:
     path = plan.context.eval_dir / "evaluation-report.md"
     write_text(path, "\n".join(lines).rstrip() + "\n")
     return path
+
+
+SMALL_SAMPLE = 10  # fewer images per row than this is never described as conclusive
+
+
+def image_row_counts(plan: Plan) -> dict[tuple[str, str], dict[str, int]]:
+    """Accepted, planned, and pending image counts per (model, arm), from banked run reports."""
+    counts: dict[tuple[str, str], dict[str, int]] = {}
+    spec_by_fingerprint = {spec.specification_fingerprint: spec for spec in plan.specs}
+    for fingerprint, run_id in plan.banked_run_ids.items():
+        report_path = plan.context.eval_dir / "runs" / run_id / "report.yml"
+        if not report_path.is_file():
+            continue
+        evidence = load_yaml(report_path).get("evidence")
+        if not evidence:
+            continue
+        spec = spec_by_fingerprint[fingerprint]
+        row = counts.setdefault((spec.model, spec.arm_id), {"accepted": 0, "planned": 0, "pending": 0})
+        for key in row:
+            row[key] += int(evidence["counts"][key])
+    return counts
+
+
+def image_outcome(counts: dict[tuple[str, str], dict[str, int]]) -> tuple[str, str]:
+    """(summary, caveat) for an image eval, in counts, and honest about how little one image proves."""
+    if not counts:
+        return (
+            "No compatible completed evidence is available to answer the question.",
+            "Nothing can be concluded yet.",
+        )
+
+    def label(key: tuple[str, str]) -> str:
+        return f"{key[0]} / {key[1]}"
+
+    def share(row: dict[str, int]) -> str:
+        n = row["planned"]
+        return f"{row['accepted']} of {n} images accepted ({row['accepted'] / n * 100:.1f}%)" if n else "no images"
+
+    ordered = sorted(counts, key=lambda k: counts[k]["accepted"] / counts[k]["planned"] if counts[k]["planned"] else 0, reverse=True)
+    pending = sum(row["pending"] for row in counts.values())
+    notes: list[str] = []
+    if pending:
+        notes.append(
+            f"{pending} image(s) still await required review and count as not accepted, so these "
+            "numbers will change."
+        )
+    if len(ordered) == 1:
+        key = ordered[0]
+        only = counts[key]
+        summary = f"{label(key)}: {share(only)}. There is no second row to compare."
+        if 0 < only["planned"] < SMALL_SAMPLE:
+            notes.append(
+                f"With only {only['planned']} image(s), a single image changes this result by "
+                f"{100 / only['planned']:.1f} percentage points."
+            )
+    else:
+        first, last = ordered[0], ordered[-1]
+        a, b = counts[first], counts[last]
+        if a["accepted"] * b["planned"] == b["accepted"] * a["planned"]:
+            summary = f"{label(first)} and {label(last)} accepted the same share: {share(a)}."
+        else:
+            summary = f"{label(first)}: {share(a)}. {label(last)}: {share(b)}."
+            smallest = min(row["planned"] for row in counts.values())
+            one_image_apart = a["planned"] == b["planned"] and abs(a["accepted"] - b["accepted"]) <= 1
+            if smallest < SMALL_SAMPLE or one_image_apart:
+                notes.append(
+                    f"With only {smallest} image(s) per row, this gap is within what a single image can "
+                    "change. It does not show that either row is better."
+                )
+    notes.append(
+        "Acceptance reflects the declared reviewers' judgments. This is an observed comparison; it "
+        "does not establish why the rows differ or whether the result generalizes."
+    )
+    return summary, " ".join(notes)
 
 
 def _image_sections(plan: Plan) -> list[str]:
@@ -455,6 +533,12 @@ def _image_sections(plan: Plan) -> list[str]:
             )
         lines.append("")
     return lines
+
+
+def _is_image_eval(plan: Plan) -> bool:
+    from .tasks import task_for
+
+    return task_for(plan.context.evaluation, plan.context.case).supports_review
 
 
 def _money(value: Any) -> str:

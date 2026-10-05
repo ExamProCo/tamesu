@@ -26,7 +26,7 @@ from .evidence import RunItem, select_generated_items
 from .identity import digest_bytes, digest_file
 from .models import EvalContext
 from .policy import Acceptance, resolved_acceptance
-from .rubric import NO_REASON, Rubric, load_rubric, overall_pass
+from .rubric import NO_REASON, OTHER_REASON, Rubric, load_rubric, overall_pass
 
 PACK_MODES = ("absolute",)  # "comparison" is reserved for the later scanner ablation
 REVIEWER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -123,13 +123,21 @@ def export_pack(
     reviewer: str | None = None,
     seed: int | None = None,
     include_reviewed: bool = False,
+    force: bool = False,
 ) -> ExportResult:
     rubric = load_review_rubric(context)
     acceptance = resolved_acceptance(context.evaluation["evaluation"])
     if reviewer is not None and not REVIEWER_PATTERN.fullmatch(reviewer):
         raise ExecutionError("Reviewer IDs may use letters, digits, '.', '_' and '-'.")
-    if out_dir.exists() and any(out_dir.iterdir()):
-        raise ExecutionError(f"Refusing to export into a non-empty directory: {out_dir}")
+    replacing = out_dir.exists() and any(out_dir.iterdir())
+    if replacing and not force:
+        raise ExecutionError(
+            f"Refusing to export into a non-empty directory: {out_dir}. "
+            "Choose another --out, or pass --force to replace an earlier review pack."
+        )
+    if replacing and not (out_dir / "pack.yml").is_file():
+        # --force only ever replaces a pack, never an arbitrary directory
+        raise ExecutionError(f"{out_dir} does not look like a review pack (no pack.yml); not replacing it.")
 
     selection = select_generated_items(context, run_id)
     owed: list[RunItem] = []
@@ -150,6 +158,10 @@ def export_pack(
     pack_id = f"pack-{created.strftime('%Y%m%dT%H%M%SZ')}-{rng.getrandbits(16):04x}"
 
     result = ExportResult(pack_id, out_dir, keys_dir(context) / f"{pack_id}.yml", 0, list(selection.skipped))
+    if replacing:
+        # Deleted only now, after everything that can fail has passed, so a refused export
+        # leaves the earlier pack intact. Its key file stays in review/keys/.
+        shutil.rmtree(out_dir)
     images_dir = out_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
     pack_items: list[dict[str, Any]] = []
@@ -296,6 +308,27 @@ document.getElementById("save").addEventListener("click", () => {
     });
     return {presentation_id: item.presentation_id, dimensions: dims, notes: s.notes || ""};
   });
+  const noReason = [];
+  PACK.items.forEach((item) => {
+    const d = (state[item.presentation_id] || {}).dimensions || {};
+    Object.entries(d).forEach(([dim, o]) => {
+      if (o.pass === false && !o.reason_code) noReason.push(item.presentation_id + " / " + dim);
+    });
+  });
+  if (noReason.length) {
+    document.getElementById("status").textContent =
+      "Choose a reason for every fail: " + noReason.join(", ");
+    return;
+  }
+  const missing = PACK.items.filter((item) => {
+    const s = state[item.presentation_id], d = (s && s.dimensions) || {};
+    return Object.values(d).some((o) => o.reason_code === "other") && !(s.notes || "").trim();
+  });
+  if (missing.length) {
+    document.getElementById("status").textContent =
+      "Add a note explaining 'other' for: " + missing.map((i) => i.presentation_id).join(", ");
+    return;
+  }
   const doc = {schema_version: 1, pack_id: PACK.pack_id,
                reviewer: document.getElementById("reviewer").value.trim(), responses};
   // JSON is valid YAML, so the import reads this file unchanged.
@@ -404,6 +437,12 @@ def import_responses(context: EvalContext, responses_path: Path) -> ImportResult
                 if code not in (None, NO_REASON):
                     problems.append(f"{location}: a passing dimension takes no reason_code")
                 code = NO_REASON
+            elif code is None:
+                problems.append(
+                    f"{location}: marked fail but no reason was chosen "
+                    f"(pick one of: {', '.join(dimension.reason_codes)})"
+                )
+                continue
             elif code not in dimension.reason_codes:
                 problems.append(
                     f"{location}: reason_code {code!r} is not one of {', '.join(dimension.reason_codes)}"
@@ -425,6 +464,12 @@ def import_responses(context: EvalContext, responses_path: Path) -> ImportResult
             problems.append(f"{where}: the stored image changed since export ({presentation_id}); export a new pack")
             continue
         notes = response.get("notes", "")
+        used_other = sorted(d for d, o in recorded.items() if o["reason_code"] == OTHER_REASON)
+        if used_other and not (isinstance(notes, str) and notes.strip()):
+            problems.append(
+                f"{where}: reason_code 'other' on {', '.join(used_other)} needs an explanation in notes"
+            )
+            continue
         record = {
             "schema_version": 1,
             "review_id": f"{reviewer}--{stamp}",

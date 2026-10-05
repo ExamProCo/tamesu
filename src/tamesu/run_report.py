@@ -23,3 +23,16 @@ def refresh_reports(context: EvalContext, run_ids: list[str]) -> None:
     for run_id in sorted(set(run_ids)):
         run_dir = context.eval_dir / "runs" / run_id
         task.build_report(context, run_dir, load_yaml(run_dir / "run.yml"))
+    sync_analysis_quietly(context)
+
+
+def sync_analysis_quietly(context: EvalContext, *, stamp: bool = False) -> None:
+    """Refresh analysis.md; a problem here must never fail a run, judgment, or import."""
+    import sys
+
+    from .analysis import sync_analysis
+
+    try:
+        sync_analysis(context, stamp=stamp)
+    except Exception as exc:  # noqa: BLE001
+        print(f"warning: could not update analysis.md: {exc}", file=sys.stderr)

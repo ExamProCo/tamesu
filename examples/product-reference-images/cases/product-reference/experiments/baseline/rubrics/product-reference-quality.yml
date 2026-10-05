@@ -2,19 +2,34 @@ schema_version: 1
 name: product-reference-quality
 rationale: product-reference-quality.md
 dimensions:
-  - id: single-product-composition
+  - id: single-product
     question: >
-      Exactly one complete product is shown, isolated, fully in frame, from roughly a
-      front three-quarter view, on an uncluttered background.
-    reason_codes: [multiple-products, cropped, wrong-viewpoint, background-clutter]
+      Exactly one product is shown. No second product, matching set, or duplicate appears.
+    reason_codes: [multiple-products, other]
+  - id: fully-in-frame
+    question: >
+      The whole product, including its handle, lid, straps, or other parts, is inside the
+      frame with visible margin. No part is cut off by an image edge.
+    reason_codes: [cropped, other]
+  - id: front-three-quarter-view
+    question: >
+      The camera sees the product from the front and about 30 to 60 degrees to one side, so
+      both its front and one side are visible. Straight-on front, pure side, back, top-down,
+      and low-angle shots all fail.
+    reason_codes: [front-on, side-on, back-or-top-down, other]
+  - id: plain-background
+    question: >
+      The background is a plain, light, uncluttered surface. No props, text, scenery, or
+      busy texture appears.
+    reason_codes: [props-or-scenery, busy-background, other]
   - id: matches-brief
     question: >
       The product is the kind of object the brief describes, with its stated colors,
       materials, and features.
-    reason_codes: [wrong-object, wrong-colors-or-materials, missing-features]
+    reason_codes: [wrong-object, wrong-colors-or-materials, missing-features, other]
   - id: fictional-branding
     question: >
-      No real brand, logo, trademark, or look-alike of one appears; any text is invented.
-    reason_codes: [real-brand, logo-lookalike]
+      No real brand, logo, trademark, or look-alike of one appears. Any text is invented.
+    reason_codes: [real-brand, logo-lookalike, other]
 acceptance:
   rule: all_dimensions_pass

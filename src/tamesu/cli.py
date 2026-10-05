@@ -109,6 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
     review_export.add_argument(
         "--all", dest="include_reviewed", action="store_true", help="Include images already reviewed."
     )
+    review_export.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing review pack in --out (only a directory containing pack.yml).",
+    )
     review_import = review_commands.add_parser("import", help="Import a completed responses.yml.")
     review_import.add_argument("eval_id")
     review_import.add_argument("responses", type=Path)
@@ -655,6 +660,7 @@ def command_review(project_root: Path, args: argparse.Namespace) -> int:
             reviewer=args.reviewer,
             seed=args.seed,
             include_reviewed=args.include_reviewed,
+            force=args.force,
         )
         print(f"Exported {result.exported} image(s) to {result.out_dir} ({result.pack_id}).")
         print(f"Key (keep it away from reviewers): {result.key_path}")
@@ -811,6 +817,9 @@ def command_close(
         raise TamesuError(f"Could not update status in {eval_path}")
     write_text(eval_path, updated)
     closed_context = load_eval_context(project_root, eval_id)
+    from .run_report import sync_analysis_quietly
+
+    sync_analysis_quietly(closed_context, stamp=True)  # evidence is final once closed
     closed_plan = build_plan(closed_context)
     build_leaderboard(closed_plan)
     build_evaluation_report(closed_plan)

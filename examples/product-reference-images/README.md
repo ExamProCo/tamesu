@@ -69,7 +69,8 @@ Now review the images yourself, blinded to model and judge:
 
 ```sh
 tamesu review export product-reference/baseline/two-model-baseline --out review-pack --reviewer you
-open review-pack/review.html        # or edit review-pack/responses.yml by hand
+open review-pack/review.html        # re-exporting after a rerun? add --force to replace the old pack
+# or edit review-pack/responses.yml by hand
 tamesu review import product-reference/baseline/two-model-baseline review-pack/responses.yml
 tamesu review status product-reference/baseline/two-model-baseline
 ```
@@ -80,15 +81,58 @@ import it. Leave an image untouched to review it later. Then:
 ```sh
 tamesu status  product-reference/baseline/two-model-baseline   # owed work and stale evidence
 tamesu report  product-reference/baseline/two-model-baseline
-tamesu close   product-reference/baseline/two-model-baseline
+tamesu close   product-reference/baseline/two-model-baseline   # finish analysis.md first
 tamesu promote product-reference/baseline/two-model-baseline \
   --to product-reference/accepted-references-v1 --dry-run
 ```
 
 `close` refuses while reviews are missing (`--allow-incomplete-review` waives it and is
-recorded in `closing.yml`). Open `evaluation-report.md`: mechanical, model-judge, and human
+recorded in `closing.yml`).
+
+## Present the results
+
+Once the eval is closed, render a static case study that shows the generated images next to
+their evidence:
+
+```sh
+tamesu present product-reference
+open build/present/product-reference/index.html
+```
+
+The page lists each run with how many images were accepted. Open an item to see its image,
+the brief, and the mechanical, model-judge, and human results in separate columns. Images
+are copied into `build/present/product-reference/assets/images/`, so the folder is
+self-contained. `present` makes no provider calls and can be rebuilt at any time; add
+`tamesu pack product-reference` afterwards if you want a shareable archive (it needs a
+`publication.yml`; see the [packaging tutorial](../../docs/tutorial-presentation-packaging-shipping.md)).
+
+## Write your conclusion
+
+The generated outcome sentence is mechanical. Your interpretation goes in `analysis.md` beside
+`eval.yml` (`cases/product-reference/experiments/baseline/evals/two-model-baseline/`), and
+`present` shows it under "Conclusion and next experiments". You do not create it: `run` writes
+a draft as soon as there is a banked run, and keeps its "Evidence at a glance" section current
+as you judge and review. Open it, replace the `TODO` lines in your own words, and say what the
+counts support and what three images and one reviewer cannot.
+
+`tamesu close` stamps the file so the page can say it matches the evidence. If you import
+another review afterwards, the page flags the analysis as out of date.
+
+## The reports
+
+Open `evaluation-report.md`: mechanical, model-judge, and human
 results are separate columns, with per-dimension failures and an item table that links to
 each image, judgment, and review. Drop `--dry-run` to create the new dataset version.
+
+## The rubric
+
+Each dimension is one yes/no claim, so a reviewer can say "fine except for the angle" and
+the report can say which claim fails most: `single-product`, `fully-in-frame`,
+`front-three-quarter-view`, `plain-background`, `matches-brief`, and `fictional-branding`.
+The three-quarter view is a hard requirement (a straight-on shot fails). Each dimension has a
+fixed reason-code list plus `other`; choosing `other` requires a note, and the report shows
+how often it is used. If it is common, the rubric is missing a failure mode: fix the rubric
+and review again.
 
 ## Things to try
 

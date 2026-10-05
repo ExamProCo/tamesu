@@ -20,7 +20,14 @@ from .packaging import SECRET_PATTERNS, build_inventory, collect_payload, invent
 from .planner import build_plan
 from .pricing import estimate_plan_cost
 from .providers.models import PROVIDER_KEYS
-from .reporting import LOWER_IS_BETTER_METRICS, comparison_rows, status_summary
+from .reporting import (
+    LOWER_IS_BETTER_METRICS,
+    comparison_rows,
+    image_outcome,
+    image_row_counts,
+    status_summary,
+)
+from .tasks import task_for
 
 
 CSS = """\
@@ -132,6 +139,7 @@ th { border-bottom: 2px solid var(--text); }
 }
 .evidence-row { min-width: 520px; margin: 0; border-top: 1px solid var(--border); }
 .evidence-details { padding: 1rem .75rem 1.5rem; border-top: 1px solid var(--border); }
+.item-image { max-width: 100%; height: auto; border-radius: 6px; border: 1px solid #ddd; }
 .evidence-details-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
 .evidence-details h3 { margin-top: 0; }
 .evidence-details pre { margin: .5rem 0 0; }
@@ -302,6 +310,7 @@ def present_case(case_dir: Path, output_dir: Path | None = None) -> Path:
         write_text(temporary / "assets" / "style.css", CSS)
         if not data["view_only"]:
             _copy_dataset_assets(case_dir, temporary / "assets" / "data")
+            _copy_item_images(case_dir, data, temporary)
         write_json(temporary / "data.json", data)
         write_text(temporary / "index.html", _case_html(data))
         for experiment in data["experiments"]:
@@ -315,6 +324,55 @@ def present_case(case_dir: Path, output_dir: Path | None = None) -> Path:
     return destination
 
 
+def _image_item_fields(
+    context: Any,
+    run_id: str,
+    result_path: Path,
+    result: dict[str, Any],
+    report_items: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Presentation fields for an image item: the stored image plus separate evidence columns."""
+    item_id = result_path.parent.name
+    entry = report_items.get(item_id, {})
+    output = result.get("output") if isinstance(result.get("output"), dict) else None
+    image = image_source = None
+    if output:
+        source = result_path.parent / str(output["path"])
+        try:
+            image_source = source.resolve().relative_to(context.case_dir.resolve()).as_posix()
+            image = f"assets/images/{run_id}/{item_id}{source.suffix}"
+        except ValueError:
+            image = None
+    human = entry.get("human") or {}
+    return {
+        "kind": "image",
+        "outcome": result.get("outcome"),
+        "image": image,
+        "image_source": image_source,
+        "model_judge": (entry.get("model_judge") or {}).get("verdict"),
+        "human": human.get("verdict") or human.get("state"),
+        "acceptance": entry.get("acceptance") or {},
+        "revised_prompt": (result.get("provider_response") or {}).get("revised_prompt"),
+    }
+
+
+def _copy_item_images(case_dir: Path, data: dict[str, Any], destination_root: Path) -> None:
+    for experiment in data.get("experiments", []):
+        for evaluation in experiment.get("evals", []):
+            for item in evaluation.get("items", []):
+                if not item.get("image") or not item.get("image_source"):
+                    continue
+                source = (case_dir / item["image_source"]).resolve()
+                try:
+                    source.relative_to(case_dir)
+                except ValueError:
+                    continue
+                if source.is_file():
+                    target = destination_root / item["image"]
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
+
+
 def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
     evaluation = context.evaluation
     counts = summary["counts"]
@@ -326,6 +384,7 @@ def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict
     for row in rows:
         row.update(_token_totals(context.eval_dir, row.get("run_ids", [])))
     analysis = _analysis_data(context.eval_dir)
+    image_eval = task_for(context.evaluation, context.case).supports_review
     items: list[dict[str, Any]] = []
     evidence_runs: list[dict[str, Any]] = []
     dataset_items = {
@@ -343,6 +402,14 @@ def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict
         if not isinstance(resolved, dict):
             resolved = {}
         run_items: list[dict[str, Any]] = []
+        is_image_eval = task_for(context.evaluation, context.case).supports_review
+        report_items: dict[str, dict[str, Any]] = {}
+        if is_image_eval and (run_dir / "report.yml").is_file():
+            report_items = {
+                str(entry.get("item_id")): entry
+                for entry in load_yaml(run_dir / "report.yml").get("items", [])
+                if isinstance(entry, dict)
+            }
         for result_path in sorted(run_dir.glob("items/*/result.yml")):
             result = load_yaml(result_path)
             output_path = result_path.parent / "output.txt"
@@ -360,6 +427,8 @@ def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict
                 "assets": dataset_item.get("assets", []),
                 "output": _clean_untrusted(output_path.read_text(encoding="utf-8", errors="replace")) if output_path.is_file() else None,
             }
+            if is_image_eval:
+                item_data.update(_image_item_fields(context, run_id, result_path, result, report_items))
             items.append(item_data)
             run_items.append(item_data)
         selection = run.get("selection")
@@ -408,7 +477,7 @@ def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict
         "description": evaluation.get("description"),
         "status": state,
         "primary_metric": primary,
-        "observed_outcome": _observed_outcome(rows, primary),
+        "observed_outcome": _image_observed_outcome(plan) if image_eval else _observed_outcome(rows, primary),
         "leader": {"model": leader["model"], "arm": leader["arm"], "value": leader["primary_mean"]} if leader else None,
         "coverage": counts,
         "rows": rows,
@@ -498,8 +567,15 @@ def _analysis_data(eval_dir: Path) -> dict[str, Any] | None:
                 pass
     digest = evidence_digest(eval_dir)
     matches = metadata.get("evidence_digest") == digest
+    unfinished = any(re.search(r"\bTODO\b", line) for line in body.splitlines())
+    if unfinished:
+        label = "Draft analysis: unfinished (TODO lines remain)"
+    elif matches:
+        label = "Analysis, matches the shown evidence"
+    else:
+        label = "Author commentary, not verified against these results"
     return {
-        "label": "Analysis, matches the shown evidence" if matches else "Author commentary, not verified against these results",
+        "label": label,
         "matches_evidence": matches,
         "evidence_digest": digest,
         "declared_evidence_digest": metadata.get("evidence_digest"),
@@ -792,12 +868,21 @@ def _run_evidence_html(runs: Any) -> str:
         if not isinstance(run, dict):
             continue
         items = run.get("items") if isinstance(run.get("items"), list) else []
-        exact_matches = sum(
-            isinstance(item, dict)
-            and isinstance(item.get("scores"), dict)
-            and item["scores"].get("exact_match") is True
-            for item in items
-        )
+        is_image_run = any(isinstance(item, dict) and item.get("kind") == "image" for item in items)
+        if is_image_run:
+            exact_matches = sum(
+                isinstance(item, dict)
+                and isinstance(item.get("acceptance"), dict)
+                and item["acceptance"].get("state") == "accepted"
+                for item in items
+            )
+        else:
+            exact_matches = sum(
+                isinstance(item, dict)
+                and isinstance(item.get("scores"), dict)
+                and item["scores"].get("exact_match") is True
+                for item in items
+            )
         completed = int(run.get("completed_items") or 0)
         selected = int(run.get("selected_items") or 0)
         repetition = run.get("repetition")
@@ -828,10 +913,16 @@ def _run_evidence_html(runs: Any) -> str:
         )
     if not rows:
         return ""
+    image_runs = any(
+        isinstance(item, dict) and item.get("kind") == "image"
+        for run in runs
+        if isinstance(run, dict)
+        for item in (run.get("items") or [])
+    )
     return (
         '<div class="run-table">'
         '<div class="run-header"><span>Model</span><span>Arm</span><span>Repetition</span>'
-        '<span>Coverage</span><span>Exact matches</span><span>Cost</span></div>'
+        f'<span>Coverage</span><span>{"Accepted" if image_runs else "Exact matches"}</span><span>Cost</span></div>'
         + "".join(rows)
         + "</div>"
     )
@@ -852,6 +943,39 @@ def _item_evidence_html(items: Any) -> str:
             "Yes" if exact_match is True else "No" if exact_match is False else "—"
         )
         state = str(item.get("state") or "unknown").replace("-", " ").title()
+        if item.get("kind") == "image":
+            acceptance = item.get("acceptance") if isinstance(item.get("acceptance"), dict) else {}
+            exact_match_label = str(acceptance.get("state") or "—").title()
+            image_html = (
+                f'<img class="item-image" src="../{_attr(item["image"])}" alt="{_attr(item.get("item_id"))}">'
+                if item.get("image")
+                else f"<p>No image ({_e((item.get('outcome') or {}).get('reason'))}).</p>"
+            )
+            evidence = {
+                "outcome": item.get("outcome"),
+                "mechanical": scores,
+                "model_judge": item.get("model_judge"),
+                "human": item.get("human"),
+                "acceptance": acceptance,
+            }
+            if item.get("revised_prompt"):
+                evidence["revised_prompt"] = item["revised_prompt"]
+            details = (
+                '<div class="evidence-details">'
+                '<div class="evidence-details-grid">'
+                f"<div><h3>Image</h3>{image_html}</div>"
+                f"<div><h3>Input</h3><pre>{_e(json.dumps(item.get('input'), sort_keys=True, ensure_ascii=False, indent=2))}</pre></div>"
+                f"<div><h3>Evidence (separate columns, never blended)</h3><pre>{_e(json.dumps(evidence, sort_keys=True, ensure_ascii=False, indent=2))}</pre></div>"
+                "</div></div>"
+            )
+            rows.append(
+                '<details class="evidence-row"><summary>'
+                f"<span><code>{_e(item.get('item_id'))}</code></span>"
+                f"<span>{_e(state)}</span>"
+                f"<span>{_e(exact_match_label)}</span>"
+                f"</summary>{details}</details>"
+            )
+            continue
         details = (
             '<div class="evidence-details">'
             '<div class="evidence-details-grid">'
@@ -874,7 +998,7 @@ def _item_evidence_html(items: Any) -> str:
     return (
         '<div class="evidence-table">'
         '<div class="evidence-header"><span>Item</span><span>Status</span>'
-        '<span>Exact match</span></div>'
+        f'<span>{"Acceptance" if any(isinstance(i, dict) and i.get("kind") == "image" for i in items) else "Exact match"}</span></div>'
         + "".join(rows)
         + "</div>"
     )
@@ -1014,6 +1138,11 @@ def _key_values(rows: list[tuple[str, Any]]) -> str:
 
 def _number(value: Any) -> str:
     return "—" if isinstance(value, bool) or not isinstance(value, (int, float)) else f"{value:.4f}"
+
+
+def _image_observed_outcome(plan: Any) -> dict[str, str]:
+    summary, caveat = image_outcome(image_row_counts(plan))
+    return {"summary": summary, "caveat": caveat}
 
 
 def _observed_outcome(rows: list[dict[str, Any]], primary: Any) -> dict[str, str]:
