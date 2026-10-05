@@ -18,9 +18,13 @@ Every file is designed to remain readable without the Tamesu CLI.
 | `report.yml` | Tamesu | Summarizes scores and execution results |
 | `judge.yml` | Tamesu or reviewer | Preserves a structured judgment for one item |
 | `logs/<run-id>.jsonl` | Tamesu | Append-only, versioned run timeline |
+| `leaderboard.md` | Tamesu | Provides a compact comparison across compatible runs |
+| `evaluation-report.md` | Tamesu | Explains aggregate results, coverage, and limitations |
+| `analysis.md` | Human or coding agent | Records a reviewable interpretation of the evidence |
 
-The first three files are authored plans. The remaining files are evidence or derived
-reports and must not be hand-edited to make an eval appear complete.
+The first three files are authored plans. Run, result, judge, and log files are evidence.
+Reports, leaderboards, and analyses are derived views and must not be edited to make an
+eval appear complete.
 
 ## Common rules
 

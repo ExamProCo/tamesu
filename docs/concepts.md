@@ -144,7 +144,7 @@ Tamesu separates three kinds of files:
 |---|---|---|
 | Plan | Declares intended work | Case, dataset, and eval manifests; prompts; rubrics |
 | Evidence | Records what occurred | Run manifests, outputs, call logs, judgments |
-| Derived view | Summarizes existing evidence | Reports, comparisons, leaderboards |
+| Derived view | Summarizes or interprets existing evidence | Reports, comparisons, leaderboards, analyses |
 
 Plans and evidence should be preserved in version control or durable storage. Derived
 views can be rebuilt from the evidence and may be replaced by explicit reporting or

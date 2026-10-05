@@ -183,6 +183,8 @@ An eval owns its manifest and the evidence created from it:
 evals/
 └── reference-ablation/
     ├── eval.yml
+    ├── analysis.md
+    ├── evaluation-report.md
     ├── leaderboard.md
     ├── logs/
     │   └── <run-id>.jsonl
@@ -209,6 +211,16 @@ run appear complete.
 
 The leaderboard is a generated view across compatible reports. It is convenient for
 review, but is not a source of truth and can be rebuilt.
+
+### `evaluation-report.md`
+
+The evaluation report is a generated explanation of compatible results, evidence
+coverage, diagnostic metrics, and limitations. It is deterministic and makes no model
+calls. It does not replace the run reports or make causal claims about observed
+differences.
+
+An optional `analysis.md` may contain a reviewed human or coding-agent interpretation.
+It is also a derived view and must remain distinguishable from recorded evidence.
 
 ### `logs/`
 
@@ -279,7 +291,7 @@ outputs, original call records, or immutable judgments.
 |---|---|---|
 | Authored plan | `case.yml`, `dataset.yml`, `eval.yml`, prompts, rubrics | Only through an intentional source edit |
 | Recorded evidence | `run.yml`, item outputs, `result.yml`, call logs, judgments | No; resume may append missing compatible work |
-| Derived output | `report.yml`, `leaderboard.md` | Yes, through an explicit rebuild or rescore |
+| Derived output | `report.yml`, `leaderboard.md`, `evaluation-report.md`, `analysis.md` | Yes, through an explicit rebuild, rescore, or analysis step |
 
 Partial and failed artifacts remain in place for inspection. Tamesu does not silently
 delete them.
@@ -303,7 +315,7 @@ Commit the files needed to understand and reproduce an evaluation:
 
 - manifests, prompts, rubrics, schemas, and evaluator code;
 - small source datasets and assets when licensing permits;
-- completed run metadata, reports, and leaderboards;
+- completed run metadata, reports, leaderboards, and evaluation reports;
 - human-review records and other evidence needed to support a conclusion.
 
 Do not commit:

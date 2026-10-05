@@ -6,7 +6,7 @@
 Tamesu's command-line interface is designed around a small workflow:
 
 ```text
-lint → plan → activate → run → status → rescore → compare → close
+lint → plan → activate → run → status → compare → report → close
 ```
 
 The examples use `tamesu` as the executable name. Commands operate on files in the
@@ -27,6 +27,7 @@ current repository and keep all evaluation evidence inspectable on disk.
 | `rescore` | Recompute scores from stored evidence | Yes | No in 0.1 |
 | `compare` | Compare compatible completed runs | No | No |
 | `leaderboard` | Rebuild an eval's Markdown leaderboard | Yes | No |
+| `report` | Build a human-readable eval report | Yes | No |
 | `close` | Verify completion and close an eval | Yes | No |
 
 `rescore` never calls a provider in Tamesu 0.1. It recomputes deterministic scores from
@@ -357,6 +358,29 @@ links to run reports, and its generation and scorer versions.
 The leaderboard is a derived view, not evidence. Rebuilding it does not modify run
 artifacts or make provider calls.
 
+## `tamesu report`
+
+Generate or rebuild the human-readable report for an eval:
+
+```sh
+tamesu report support-ticket-triage/decision-rules/prompt-ablation
+```
+
+The command writes `evaluation-report.md` beside `eval.yml`. Unlike the compact
+leaderboard, it explains:
+
+- whether all planned evidence is complete;
+- the leading observed primary-metric value and the spread between rows;
+- diagnostic metrics for each model and arm;
+- partial, failed, stale, and extra evidence excluded from comparison;
+- what the table columns mean;
+- dataset, repetition, failure, and cost limitations;
+- links to every contributing run report.
+
+The wording is generated deterministically from stored manifests and reports. It makes no
+model call, proposes no cause for an observed difference, and does not make a deployment
+recommendation. It is a derived view and may be rebuilt at any time.
+
 ## `tamesu close`
 
 Verify that an eval has met its declared completion requirements and close it to new runs.
@@ -373,8 +397,8 @@ Closing requires:
 - every compatible run to have a current report.
 
 When validation succeeds, the command changes the eval status to `complete` and rebuilds
-the leaderboard. Those changes should be reviewed and committed like any other plan
-change.
+the leaderboard and evaluation report. Those changes should be reviewed and committed
+like any other plan change.
 
 If completion requirements are intentionally waived, the reason must first be recorded in
 the eval manifest using the final schema's explicit closure field. `close` never silently
@@ -414,6 +438,7 @@ Review the results and close the record:
 ```sh
 tamesu compare support-ticket-triage/decision-rules/prompt-ablation
 tamesu leaderboard support-ticket-triage/decision-rules/prompt-ablation
+tamesu report support-ticket-triage/decision-rules/prompt-ablation
 tamesu close support-ticket-triage/decision-rules/prompt-ablation
 ```
 
@@ -427,7 +452,7 @@ The CLI is intended to work in local shells and continuous integration:
 - errors and actionable diagnostics go to standard error;
 - files are written atomically except append-only call logs;
 - paid work is never triggered by `lint`, `list`, `models`, `plan`, `activate`, `status`,
-  `compare`, `leaderboard`, or `close`;
+  `compare`, `leaderboard`, `report`, or `close`;
 - interrupt signals stop new scheduling and preserve completed work.
 
 Successful commands return `0`, lint validation failures return `1`, user-facing command

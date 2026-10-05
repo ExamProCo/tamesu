@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -15,7 +16,12 @@ from tamesu.config import load_eval_context, load_yaml
 from tamesu.errors import ConfigError, ExecutionError, ProviderError, TamesuError
 from tamesu.models import ProviderResponse
 from tamesu.planner import build_plan
-from tamesu.reporting import build_leaderboard, comparison_rows, status_summary
+from tamesu.reporting import (
+    build_evaluation_report,
+    build_leaderboard,
+    comparison_rows,
+    status_summary,
+)
 from tamesu.runner import resume_run, run_eval
 from tamesu.scoring import rescore_run
 
@@ -92,14 +98,21 @@ class ExampleIntegrationTests(unittest.TestCase):
         shutil.copytree(
             source,
             self.project,
-            ignore=shutil.ignore_patterns("runs", "logs", "leaderboard.md"),
+            ignore=shutil.ignore_patterns(
+                "runs", "logs", "leaderboard.md", "evaluation-report.md", "analysis.md"
+            ),
         )
         eval_path = (
             self.project
             / "cases/support-ticket-triage/experiments/decision-rules/evals/prompt-ablation/eval.yml"
         )
         eval_path.write_text(
-            eval_path.read_text(encoding="utf-8").replace("status: draft", "status: active"),
+            re.sub(
+                r"(?m)^status:\s*(draft|active|complete)\s*$",
+                "status: active",
+                eval_path.read_text(encoding="utf-8"),
+                count=1,
+            ),
             encoding="utf-8",
         )
         self.provider = FixtureProvider()
@@ -222,7 +235,17 @@ class ExampleIntegrationTests(unittest.TestCase):
 
         leaderboard_path = build_leaderboard(completed_plan)
         self.assertTrue(leaderboard_path.is_file())
-        self.assertIn("basic-prompt", leaderboard_path.read_text(encoding="utf-8"))
+        leaderboard = leaderboard_path.read_text(encoding="utf-8")
+        self.assertIn("basic-prompt", leaderboard)
+        self.assertIn("| 0.0000 | 0.0160 |", leaderboard)
+
+        evaluation_report_path = build_evaluation_report(completed_plan)
+        evaluation_report = evaluation_report_path.read_text(encoding="utf-8")
+        self.assertIn("All 4 planned runs are banked", evaluation_report)
+        self.assertIn("same observed `exact_match_rate`", evaluation_report)
+        self.assertIn("(100.00%)", evaluation_report)
+        self.assertIn("## Diagnostic metrics", evaluation_report)
+        self.assertIn("## Limitations", evaluation_report)
 
         first_run_dir = context.eval_dir / "runs" / run_ids[0]
         report = rescore_run(context, first_run_dir)
@@ -231,7 +254,19 @@ class ExampleIntegrationTests(unittest.TestCase):
         self.assertEqual(command_close(self.project, EVAL_ID), 0)
         closed = load_eval_context(self.project, EVAL_ID)
         self.assertEqual(closed.evaluation["status"], "complete")
+        closed_report = closed.eval_dir / "evaluation-report.md"
+        self.assertIn("- Status: `complete`", closed_report.read_text(encoding="utf-8"))
         self.assertEqual(self.provider.calls, 40)
+
+    def test_evaluation_report_marks_probe_only_evidence_incomplete(self) -> None:
+        context = load_eval_context(self.project, EVAL_ID)
+        run_eval(context, limit_items=1)
+        report_path = build_evaluation_report(build_plan(context))
+        report = report_path.read_text(encoding="utf-8")
+
+        self.assertIn("The eval is incomplete", report)
+        self.assertIn("No compatible completed runs", report)
+        self.assertIn("Partial runs excluded: 4", report)
 
     def test_failed_probes_are_visible_in_cli_status_and_run_output(self) -> None:
         self.provider.unexpected_failures_remaining = 4

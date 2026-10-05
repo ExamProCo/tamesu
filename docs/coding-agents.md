@@ -1,14 +1,15 @@
 # Using Tamesu with coding agents
 
-Tamesu includes a portable authoring skill that gives coding agents the project model,
-safety boundaries, and validation workflow needed to create or revise an eval:
+Tamesu includes two portable skills:
 
 ```text
 skills/tamesu-eval-authoring/SKILL.md
+skills/tamesu-eval-analysis/SKILL.md
 ```
 
-The skill is intentionally a single Markdown file with YAML frontmatter. It does not
-depend on a Tamesu-specific agent integration, generated scaffolding, or an MCP server.
+The authoring skill helps create and validate an eval. The analysis skill turns completed
+evidence into a cited `analysis.md` without treating the agent's interpretation as new
+evidence. Neither depends on a Tamesu-specific integration or MCP server.
 
 ## Ask an agent to author an eval
 
@@ -50,9 +51,9 @@ probe or full run explicitly when that is what you want.
 
 ## Make the skill discoverable
 
-Keep `skills/tamesu-eval-authoring/SKILL.md` as the repository's canonical copy. For a
-harness that uses a project-level skill directory, point it at the canonical file or
-create the vendor-supported link to it instead of maintaining a second copy.
+Keep the files under `skills/` as the repository's canonical copies. For a harness that
+uses a project-level skill directory, point it at the relevant canonical file or create
+the vendor-supported link to it instead of maintaining a second copy.
 
 If a harness does not discover repository skills automatically, reference the file in
 your request:
@@ -63,6 +64,30 @@ Read skills/tamesu-eval-authoring/SKILL.md and use it to author this eval: ...
 
 This fallback works with coding agents that can read repository files even when they do
 not implement automatic skill discovery.
+
+## Ask an agent to analyze an eval
+
+Generate the deterministic report first:
+
+```sh
+tamesu report <case>/<experiment>/<eval>
+```
+
+Then ask the coding agent to use the analysis skill:
+
+```text
+Read skills/tamesu-eval-analysis/SKILL.md and analyze
+support-ticket-triage/decision-rules/prompt-ablation. Write analysis.md beside eval.yml.
+Do not call providers or change evaluation evidence.
+```
+
+The agent should distinguish observed facts from interpretation, limitations, and next
+steps. It should cite run IDs or repository-relative evidence paths, account for excluded
+partial, failed, stale, or extra runs, and avoid causal claims the experiment did not
+establish.
+
+`analysis.md` is a derived view. It can be reviewed, edited, regenerated, or omitted
+without changing the eval's metrics or completion state.
 
 ## Good request boundaries
 

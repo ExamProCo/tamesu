@@ -664,7 +664,36 @@ The small dataset is suitable for learning the workflow, not for claiming that o
 is generally superior. A production decision would require more representative items and
 an appropriate uncertainty analysis.
 
-## 13. Generate the leaderboard
+### Turn the table into a bounded conclusion
+
+In one run of this example, the comparison looked like this:
+
+```text
+muse-spark-1.2  basic-prompt    2  16  0.6875  0.0625  0.0  0.0139
+muse-spark-1.2  decision-rules  2  16  0.7500  0.0000  0.0  0.0132
+```
+
+The decision-rules arm recorded an exact-match mean 0.0625 higher than the basic prompt.
+Across 16 scored item observations per arm, that difference corresponds to one additional
+whole-record match. Both repetitions of the decision-rules arm scored 0.7500, while the
+basic arm varied between repetitions.
+
+The diagnostic metrics made the tradeoff clearer: the decision-rules arm was better at
+the `requires_human` decision but slightly worse on priority. There were no invalid JSON
+outputs or execution failures, and cost was similar.
+
+A defensible reading is:
+
+> On this eight-item synthetic dataset, the decision-rules prompt had a higher observed
+> exact-match rate, mainly alongside better escalation decisions. The sample is too small
+> to claim that it is generally better, and its priority regression deserves another
+> targeted experiment.
+
+That conclusion separates what was observed from what remains uncertain. It does not say
+the rules caused the difference, that the prompt is production-ready, or that the same
+result will hold on real support traffic.
+
+## 13. Generate the leaderboard and report
 
 Build the Markdown summary:
 
@@ -688,6 +717,28 @@ completed repetitions and links back to the underlying run reports.
 The leaderboard is a derived view. The dataset, run manifests, item outputs, results, and
 reports remain the evidence.
 
+Now generate the human-readable evaluation report:
+
+```sh
+tamesu report "$EVAL_ID"
+```
+
+Expected output is another written path:
+
+```text
+<project>/cases/support-ticket-triage/experiments/decision-rules/evals/prompt-ablation/evaluation-report.md
+```
+
+Open that file after the leaderboard. Its `What happened` section states whether the
+planned evidence is complete and summarizes the observed primary-metric difference. The
+diagnostic sections show where each arm performed differently. `Evidence coverage` lists
+anything excluded, while `Limitations` prevents the aggregate table from being read as a
+broader claim than the dataset supports.
+
+The report is generated from stored facts and uses no AI model. It will not explain why
+the difference occurred or recommend a product decision. For that deeper synthesis, use
+the `tamesu-eval-analysis` coding-agent skill after reviewing the deterministic report.
+
 ## 14. Close the eval
 
 When every repetition and report is complete, close the eval:
@@ -702,9 +753,9 @@ Expected output:
 Closed support-ticket-triage/decision-rules/prompt-ablation.
 ```
 
-Confirm that `eval.yml` now says `status: complete` and that `leaderboard.md` was rebuilt.
-At this point `run` refuses new paid work unless you deliberately create a new eval or
-reopen the lifecycle through an explicit reviewed edit.
+Confirm that `eval.yml` now says `status: complete` and that `leaderboard.md` and
+`evaluation-report.md` were rebuilt. At this point `run` refuses new paid work unless you
+deliberately create a new eval or reopen the lifecycle through an explicit reviewed edit.
 
 Closing changes the status to `complete` and prevents accidental new paid runs. Review and
 commit the updated manifest and leaderboard.
@@ -724,6 +775,7 @@ items are never silently excluded to make the result look complete.
 | Invalid JSON or wrong classification | `items/<item-id>/result.yml` |
 | Unexpected resolved prompt or parameter | `runs/<run-id>/run.yml` |
 | Unexpected aggregate metric | `runs/<run-id>/report.yml` |
+| Unsure what the leaderboard means | `evaluation-report.md` |
 
 ## Make the example your own
 

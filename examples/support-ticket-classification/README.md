@@ -4,6 +4,28 @@ This is a small, text-only Tamesu project for the
 [first eval tutorial](../../docs/tutorial.md). It asks whether explicit decision rules
 improve a model's ability to classify synthetic support tickets.
 
+## What this example is testing
+
+Imagine a company receives short support messages and wants an AI model to help route
+them. For each message, the model must decide:
+
+- what kind of problem it is, such as billing, account access, or cancellation;
+- how urgent it is;
+- whether a person needs to handle it.
+
+This example compares two ways of asking the same model to make those decisions. The
+first prompt gives basic instructions. The second prompt adds clear decision rules for
+choosing a category, setting the priority, and asking for human help.
+
+Both prompts receive the same made-up support tickets. They use the same model and model
+settings, and their answers are checked against the same known correct answers. The only
+thing we intentionally change is the prompt.
+
+The question is simple: **does adding explicit decision rules produce better routing
+decisions?** An answer is completely correct only when the category, priority, and human
+handoff decision are all correct. The individual scores also show which part of the
+decision improved or got worse.
+
 The example is intentionally self-contained:
 
 - ticket text and expected answers are stored inline in `dataset.yml`;
@@ -39,7 +61,7 @@ automatically.
 
 See the [configuration guide](../../docs/configuration.md) for precedence and alternatives.
 
-Generated runs, call logs, and leaderboards are ignored in this example so trying the
-tutorial does not add disposable evidence to Git. In a real Tamesu project, choose an
-artifact-retention policy appropriate for the sensitivity and reproducibility needs of
-the evaluation.
+Generated runs, call logs, leaderboards, evaluation reports, and coding-agent analyses are
+ignored in this example so trying the tutorial does not add disposable evidence to Git.
+In a real Tamesu project, choose an artifact-retention policy appropriate for the
+sensitivity and reproducibility needs of the evaluation.

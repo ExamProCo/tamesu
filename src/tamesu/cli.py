@@ -22,7 +22,12 @@ from .planner import build_plan
 from .providers import get_provider
 from .providers.models import MODELS, PRICING_VERIFIED_AT
 from .pricing import estimate_plan_cost, recorded_cost
-from .reporting import build_leaderboard, comparison_rows, status_summary
+from .reporting import (
+    build_evaluation_report,
+    build_leaderboard,
+    comparison_rows,
+    status_summary,
+)
 from .runner import resume_run, run_eval
 from .scoring import rescore_run
 
@@ -79,6 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     leaderboard_parser.add_argument("eval_id")
 
+    report_parser = subparsers.add_parser(
+        "report", help="Build a human-readable eval report."
+    )
+    report_parser.add_argument("eval_id")
+
     close_parser = subparsers.add_parser("close", help="Close a completed eval.")
     close_parser.add_argument("eval_id")
     return parser
@@ -132,6 +142,8 @@ def dispatch(args: argparse.Namespace) -> int:
         return command_compare(project_root, args.eval_id)
     if args.command == "leaderboard":
         return command_leaderboard(project_root, args.eval_id)
+    if args.command == "report":
+        return command_report(project_root, args.eval_id)
     if args.command == "close":
         return command_close(project_root, args.eval_id)
     raise AssertionError(f"Unhandled command: {args.command}")
@@ -433,6 +445,12 @@ def command_leaderboard(project_root: Path, eval_id: str) -> int:
     return 0
 
 
+def command_report(project_root: Path, eval_id: str) -> int:
+    plan = build_plan(load_eval_context(project_root, eval_id))
+    print(build_evaluation_report(plan))
+    return 0
+
+
 def command_close(project_root: Path, eval_id: str) -> int:
     context = load_eval_context(project_root, eval_id)
     if context.evaluation["status"] == "complete":
@@ -456,7 +474,9 @@ def command_close(project_root: Path, eval_id: str) -> int:
         raise TamesuError(f"Could not update status in {eval_path}")
     write_text(eval_path, updated)
     closed_context = load_eval_context(project_root, eval_id)
-    build_leaderboard(build_plan(closed_context))
+    closed_plan = build_plan(closed_context)
+    build_leaderboard(closed_plan)
+    build_evaluation_report(closed_plan)
     print(f"Closed {eval_id}.")
     return 0
 
