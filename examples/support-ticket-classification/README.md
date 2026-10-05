@@ -1,7 +1,9 @@
 # Support-ticket classification example
 
 This is a small, text-only Tamesu project for the
-[first eval tutorial](../../docs/tutorial.md). It asks whether explicit decision rules
+[first eval tutorial](../../docs/tutorial.md) and the
+[presentation and shipping tutorial](../../docs/tutorial-presentation-packaging-shipping.md).
+It asks whether explicit decision rules
 improve a model's ability to classify synthetic support tickets.
 
 ## What this example is testing

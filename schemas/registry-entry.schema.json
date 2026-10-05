@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tamesu.dev/schemas/registry-entry.schema.json",
+  "title": "Tamesu registry entry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "publication", "content_digest", "archive_sha256", "tamesu_version", "inventory"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "publication": {"$ref": "publication.schema.json"},
+    "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "archive_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "tamesu_version": {"type": "string", "minLength": 1},
+    "inventory": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["path", "sha256", "size"], "properties": {"path": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "size": {"type": "integer", "minimum": 0}}}}
+  }
+}

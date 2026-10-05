@@ -60,7 +60,7 @@ def build_plan(context: EvalContext) -> Plan:
         spec = by_specification.get(specification)
         if manifest.get("probe") and state in {"planned", "running", "partial"}:
             partial.append(run_id)
-        elif spec and content == spec.content_fingerprint:
+        elif spec and _content_matches(manifest, spec, context):
             if state == "complete" and not manifest.get("probe", False):
                 banked.setdefault(specification, run_id)
             elif state in {"planned", "running", "partial"}:
@@ -108,19 +108,31 @@ def make_run_spec(
         "metrics": context.evaluation.get("metrics", {}),
         "probe": probe,
     }
-    content_paths = [
-        context.case_dir / "case.yml",
-        context.dataset_path,
+    execution_paths = [
         *prompts.values(),
         Path(__file__).with_name("scoring.py"),
         Path(__file__).parent / "tasks" / "structured_text.py",
     ]
     if context.output_schema_path:
-        content_paths.append(context.output_schema_path)
-    inventory = inventory_files(content_paths, context.project_root)
+        execution_paths.append(context.output_schema_path)
+    execution_inventory = inventory_files(execution_paths, context.project_root)
+    inventory = inventory_files(
+        [
+            context.case_dir / "case.yml",
+            context.dataset_path,
+            *execution_paths,
+        ],
+        context.project_root,
+    )
     content_payload = {
+        "schema_version": 2,
         "framework_version": __version__,
-        "inventory": inventory,
+        "dataset": {
+            key: value
+            for key, value in context.dataset.items()
+            if key != "description"
+        },
+        "inventory": execution_inventory,
     }
     return RunSpec(
         eval_id=context.eval_id,
@@ -179,6 +191,45 @@ def read_run_manifests(eval_dir: Path) -> list[dict[str, Any]]:
         except Exception:
             continue
     return manifests
+
+
+def _content_matches(
+    manifest: dict[str, Any], spec: RunSpec, context: EvalContext
+) -> bool:
+    identity = manifest.get("identity", {})
+    if identity.get("content_fingerprint") == spec.content_fingerprint:
+        return True
+
+    # Runs written before content fingerprint schema 2 hashed the complete case and
+    # dataset files. Preserve those immutable runs when the only changed file is
+    # case.yml and every execution input still has its recorded digest. The resolved
+    # task is checked explicitly because it is the only case field used at execution.
+    stored_inventory = identity.get("content_inventory")
+    if not isinstance(stored_inventory, dict):
+        return False
+    provenance = manifest.get("provenance")
+    if not isinstance(provenance, dict) or provenance.get("tamesu_version") != __version__:
+        return False
+    resolved = manifest.get("resolved")
+    if not isinstance(resolved, dict):
+        return False
+    task = context.evaluation.get("task", context.case.get("default_task"))
+    if resolved.get("task") != task:
+        return False
+
+    try:
+        case_label = (
+            context.case_dir / "case.yml"
+        ).resolve().relative_to(context.project_root.resolve()).as_posix()
+    except ValueError:
+        case_label = "case.yml"
+    stored_execution = {
+        key: value for key, value in stored_inventory.items() if key != case_label
+    }
+    current_execution = {
+        key: value for key, value in spec.content_inventory.items() if key != case_label
+    }
+    return stored_execution == current_execution
 
 
 def _slug(value: str) -> str:

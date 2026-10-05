@@ -1,0 +1,16 @@
+schema_version: 1
+name: support-ticket-triage
+publisher: omenking
+version: 1.0.0
+title: Support Ticket Triage
+summary: Compare support-ticket classification prompts using synthetic customer requests.
+authors:
+  - name: Andrew Brown
+license: CC-BY-4.0
+tags:
+  - classification
+  - prompt-engineering
+profile: rescorable
+data_review:
+  acknowledged: true
+  note: The dataset contains only synthetic support tickets and no personal data.

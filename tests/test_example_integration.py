@@ -11,6 +11,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from tamesu.artifacts import write_yaml
 from tamesu.cli import command_activate, command_close, command_compare, command_run
 from tamesu.config import load_eval_context, load_yaml
 from tamesu.errors import ConfigError, ExecutionError, ProviderError, TamesuError
@@ -257,6 +258,41 @@ class ExampleIntegrationTests(unittest.TestCase):
         closed_report = closed.eval_dir / "evaluation-report.md"
         self.assertIn("- Status: `complete`", closed_report.read_text(encoding="utf-8"))
         self.assertEqual(self.provider.calls, 40)
+
+    def test_authored_descriptions_do_not_invalidate_completed_runs(self) -> None:
+        context = load_eval_context(self.project, EVAL_ID)
+        run_eval(context)
+
+        case_path = context.case_dir / "case.yml"
+        case = load_yaml(case_path)
+        case["business_use"] = "Revised human-readable business use."
+        write_yaml(case_path, case)
+        case_plan = build_plan(load_eval_context(self.project, EVAL_ID))
+        self.assertEqual(len(case_plan.banked_run_ids), 4)
+        self.assertFalse(case_plan.owed_specs)
+
+        dataset = load_yaml(context.dataset_path)
+        dataset["description"] = "Revised human-readable dataset description."
+        write_yaml(context.dataset_path, dataset)
+        dataset_plan = build_plan(load_eval_context(self.project, EVAL_ID))
+        self.assertEqual(len(dataset_plan.banked_run_ids), 4)
+        self.assertFalse(dataset_plan.owed_specs)
+
+    def test_execution_content_change_marks_completed_runs_stale(self) -> None:
+        context = load_eval_context(self.project, EVAL_ID)
+        run_eval(context)
+        prompt_path = context.experiment_dir / "prompts" / "basic-system.md"
+        prompt_path.write_text(
+            prompt_path.read_text(encoding="utf-8") + "\nChanged execution instruction.\n",
+            encoding="utf-8",
+        )
+
+        changed_plan = build_plan(load_eval_context(self.project, EVAL_ID))
+        summary = status_summary(changed_plan)
+        self.assertEqual(len(changed_plan.banked_run_ids), 2)
+        self.assertEqual(len(changed_plan.owed_specs), 2)
+        self.assertEqual(summary["counts"]["stale"], 2)
+        self.assertEqual(summary["counts"]["extra"], 0)
 
     def test_evaluation_report_marks_probe_only_evidence_incomplete(self) -> None:
         context = load_eval_context(self.project, EVAL_ID)

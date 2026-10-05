@@ -29,9 +29,72 @@ current repository and keep all evaluation evidence inspectable on disk.
 | `leaderboard` | Rebuild an eval's Markdown leaderboard | Yes | No |
 | `report` | Build a human-readable eval report | Yes | No |
 | `close` | Verify completion and close an eval | Yes | No |
+| `present` | Render a static case study | Yes | No |
+| `pack` | Build a deterministic case archive | Yes | No |
+| `verify` | Safely validate an archive | No | No |
+| `unpack` | Safely extract a package into `cases/` | Yes | No |
+| `fork` | Extract a package with new publication identity | Yes | No |
+| `publish` | Add a package to an inspectable registry | Yes | No |
+| `site build` | Build the static showcase from a registry | Yes | No |
 
 `rescore` never calls a provider in Tamesu 0.1. It recomputes deterministic scores from
 stored text outputs.
+
+## Presentation and packages
+
+Render a case study, then package and verify it:
+
+```sh
+tamesu present support-ticket-triage
+tamesu lint --portable cases/support-ticket-triage
+tamesu pack support-ticket-triage
+tamesu verify build/packages/omenking-support-ticket-triage-1.0.0.tamesu.tar.gz
+```
+
+`present` writes `build/present/<case>/index.html`, per-experiment pages, local assets,
+and `data.json`. Values from manifests, prompts, analyses, and outputs are escaped;
+pages use a restrictive content security policy and no remote resources. The page shows
+coverage, excluded evidence, unknown costs, package profile, and whether authored
+analysis is bound to the current evidence digest.
+
+`pack` requires `publication.yml`, portable references, a license, and data-review
+acknowledgement for profiles containing data. It applies the chosen `full`, `rescorable`,
+or `report-only` allow-list and performs a conservative secret scan. See
+[Case packages](packages.md) for the exact contract and safety limits.
+
+Packages can be consumed without trusting their filenames:
+
+```sh
+tamesu unpack package.tamesu.tar.gz
+tamesu fork package.tamesu.tar.gz --publisher my-team --name my-fork --version 0.1.0
+```
+
+Both commands verify the manifest and archive before writing, reject unsafe entry types
+and paths, enforce expansion limits, and refuse to overwrite an existing case.
+
+## Static showcase
+
+The v1 publishing workflow uses the separate
+[Tamesu Showcase repository](https://github.com/ExamProCo/tamesu-showcase) as its
+inspectable Git registry. From a checkout of that repository:
+
+```sh
+tamesu publish package.tamesu.tar.gz --registry registry
+tamesu site check --registry registry --author github-login
+tamesu site build --registry registry
+```
+
+`publish` creates `registry/<publisher>/<name>/<version>/entry.yml` and an unpacked
+`payload/`. The publisher must already have a separately reviewed
+`registry/publishers/<publisher>.yml` ownership record before the registry will validate.
+`site check` reproduces package hashes, checks inventories, scans secrets,
+and, when `--author` is supplied, verifies the account against
+`registry/publishers/<publisher>.yml`. `site build` writes searchable cards, publisher
+pages, case pages, downloads, and lineage to `build/site/`.
+
+The Tamesu source repository provides these commands and their schemas, but does not own
+the live registry or deploy the showcase. Registry review, CI, and Pages deployment live
+in `ExamProCo/tamesu-showcase`.
 
 ## Global options
 

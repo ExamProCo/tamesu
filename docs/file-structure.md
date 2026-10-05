@@ -116,7 +116,8 @@ cases/
 The case owns stable context and reusable inputs:
 
 - `README.md` explains the real-world problem and its constraints.
-- `case.yml` provides machine-readable case metadata.
+- `case.yml` provides machine-readable metadata and authored business use, current
+  problem, and technical uncertainty for human-readable presentations.
 - `datasets/` contains versioned dataset manifests and source assets.
 - `experiments/` contains focused hypotheses tested within the case.
 
@@ -308,6 +309,28 @@ delete them.
 
 These rules keep a repository portable while preventing manifests from reading or writing
 unrelated files outside the evaluation workspace.
+
+## Publication files and generated sites
+
+A shareable case adds an authored `publication.yml` beside `case.yml`. It supplies the
+publisher namespace, semantic version, title, summary, authors, license, tags, inclusion
+profile, data-review statement, and optional fork lineage. A report-only package also
+contains generated `package-view.yml`, which marks the extracted case as view-only.
+
+Presentation and package output lives outside `cases/`:
+
+```text
+build/
+├── present/<case>/
+├── packages/*.tamesu.tar.gz
+└── site/
+```
+
+The separate [Tamesu Showcase repository](https://github.com/ExamProCo/tamesu-showcase)
+uses `registry/<publisher>/<name>/<version>/{entry.yml,payload/}`. The framework
+repository contains the commands and schemas, while the showcase repository owns live
+publisher records, payloads, CI, and hosting. See
+[Case packages](packages.md) for the package layout and exact profile allow-lists.
 
 ## Version-control policy
 

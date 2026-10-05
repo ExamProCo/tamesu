@@ -24,6 +24,7 @@ LOWER_IS_BETTER_METRICS = {
 def status_summary(plan: Plan) -> dict[str, Any]:
     manifests = read_run_manifests(plan.context.eval_dir)
     banked_ids = set(plan.banked_run_ids.values())
+    stale_ids = set(plan.stale_run_ids)
     planned_fingerprints = {spec.specification_fingerprint for spec in plan.specs}
     counts = {
         "planned": len(plan.specs),
@@ -43,6 +44,8 @@ def status_summary(plan: Plan) -> dict[str, Any]:
             classification = "banked"
         elif manifest.get("probe"):
             classification = "failed" if state == "failed" else "partial"
+        elif run_id in stale_ids:
+            classification = "stale"
         elif specification not in planned_fingerprints:
             classification = "stale"
         elif state in {"planned", "running", "partial"}:

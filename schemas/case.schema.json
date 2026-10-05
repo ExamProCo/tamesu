@@ -4,12 +4,23 @@
   "title": "Tamesu case manifest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "name", "title", "description"],
+  "required": [
+    "schema_version",
+    "name",
+    "title",
+    "description",
+    "business_use",
+    "current_problem",
+    "technical_uncertainty"
+  ],
   "properties": {
     "schema_version": {"const": 1},
     "name": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
     "title": {"type": "string", "minLength": 1},
     "description": {"type": "string", "minLength": 1},
+    "business_use": {"type": "string", "minLength": 1},
+    "current_problem": {"type": "string", "minLength": 1},
+    "technical_uncertainty": {"type": "string", "minLength": 1},
     "default_task": {"type": "string", "minLength": 1}
   }
 }

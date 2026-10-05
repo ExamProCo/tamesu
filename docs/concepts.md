@@ -164,6 +164,10 @@ uses two identities:
 - The **content fingerprint** describes the material and machinery used: datasets,
   prompt sources, schemas, structured-text scoring and task code, and framework version.
 
+Human-readable case context and dataset descriptions are presentation metadata, so
+editing them does not invalidate completed evidence. Changes to dataset items, prompts,
+schemas, execution settings, or evaluator code still produce incompatible stale evidence.
+
 A previous run satisfies an eval slot only when both fingerprints match. A run with the
 right label but a changed prompt, dataset, or evaluator is **stale** evidence for the
 current eval rather than a compatible result.

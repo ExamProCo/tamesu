@@ -19,6 +19,15 @@ from .discovery import (
 from .errors import TamesuError
 from .environment import load_environment
 from .planner import build_plan
+from .packaging import (
+    fork_archive,
+    pack_case,
+    resolve_case,
+    unpack_archive,
+    validate_portable,
+    verify_archive,
+)
+from .presenting import present_case
 from .providers import get_provider
 from .providers.models import MODELS, PRICING_VERIFIED_AT
 from .pricing import estimate_plan_cost, recorded_cost
@@ -47,6 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     lint_parser = subparsers.add_parser("lint", help="Validate evaluation files.")
     lint_parser.add_argument("path", nargs="?", default=".")
+    lint_parser.add_argument(
+        "--portable", action="store_true", help="Require every reference to stay in the case."
+    )
 
     subparsers.add_parser("list", help="List cases, experiments, and evals.")
 
@@ -91,6 +103,57 @@ def build_parser() -> argparse.ArgumentParser:
 
     close_parser = subparsers.add_parser("close", help="Close a completed eval.")
     close_parser.add_argument("eval_id")
+
+    present_parser = subparsers.add_parser(
+        "present", help="Render a case as a static HTML case study."
+    )
+    present_parser.add_argument("case")
+    present_parser.add_argument("--output", type=Path)
+
+    pack_parser = subparsers.add_parser(
+        "pack", help="Build a deterministic, verifiable case package."
+    )
+    pack_parser.add_argument("case")
+    pack_parser.add_argument("--output-dir", type=Path)
+    pack_parser.add_argument(
+        "--without-presentation", action="store_true", help="Do not embed rendered HTML."
+    )
+
+    verify_parser = subparsers.add_parser("verify", help="Verify a .tamesu package.")
+    verify_parser.add_argument("archive", type=Path)
+
+    unpack_parser = subparsers.add_parser("unpack", help="Safely unpack a case package.")
+    unpack_parser.add_argument("archive", type=Path)
+    unpack_parser.add_argument("--cases-dir", type=Path)
+
+    fork_parser = subparsers.add_parser("fork", help="Create a new case from a package.")
+    fork_parser.add_argument("archive", type=Path)
+    fork_parser.add_argument("--publisher", required=True)
+    fork_parser.add_argument("--name")
+    fork_parser.add_argument("--version", default="0.1.0")
+    fork_parser.add_argument("--cases-dir", type=Path)
+
+    publish_parser = subparsers.add_parser(
+        "publish", help="Add a verified package to an inspectable registry."
+    )
+    publish_parser.add_argument("archive", type=Path)
+    publish_parser.add_argument("--registry", type=Path, default=Path("registry"))
+
+    site_parser = subparsers.add_parser("site", help="Validate or build the showcase site.")
+    site_commands = site_parser.add_subparsers(dest="site_command", required=True)
+    site_build = site_commands.add_parser("build", help="Build the static showcase.")
+    site_build.add_argument("--registry", type=Path, default=Path("registry"))
+    site_build.add_argument("--output", type=Path)
+    site_check = site_commands.add_parser("check", help="Validate registry entries.")
+    site_check.add_argument("--registry", type=Path, default=Path("registry"))
+    site_check.add_argument("--author")
+    site_check.add_argument(
+        "--changed-file",
+        action="append",
+        default=[],
+        metavar="STATUS:PATH",
+        help="Validate PR ownership/version rules for a changed registry file.",
+    )
     return parser
 
 
@@ -112,10 +175,44 @@ def dispatch(args: argparse.Namespace) -> int:
     if args.command == "lint":
         project_root = find_project_root(Path(args.path).resolve())
         load_environment(project_root, config_dir=args.config_dir)
-        return command_lint(Path(args.path))
+        return command_lint(Path(args.path), portable=args.portable)
     if args.command == "models":
         load_environment(None, config_dir=args.config_dir)
         return command_models(args.provider)
+    if args.command == "verify":
+        verified = verify_archive(args.archive)
+        print(f"Verified {args.archive}: {verified.content_digest}")
+        print(f"Archive SHA-256: {verified.archive_sha256}")
+        return 0
+    if args.command == "publish":
+        from .showcasing import publish_archive
+
+        destination = publish_archive(args.archive, args.registry)
+        print(f"Published registry entry: {destination}")
+        return 0
+    if args.command == "site":
+        from .showcasing import (
+            build_site,
+            validate_registry,
+            validate_registry_changes,
+        )
+
+        if args.site_command == "check":
+            if args.changed_file:
+                if not args.author:
+                    raise TamesuError("--author is required with --changed-file")
+                entries = validate_registry_changes(
+                    args.registry,
+                    author=args.author,
+                    changed_files=args.changed_file,
+                )
+            else:
+                entries = validate_registry(args.registry, author=args.author)
+            print(f"Validated {len(entries)} registry entr{'y' if len(entries) == 1 else 'ies'}.")
+            return 0
+        destination = build_site(args.registry, args.output)
+        print(f"Built showcase: {destination}")
+        return 0
     project_root = find_project_root()
     load_environment(project_root, config_dir=args.config_dir)
     if args.command == "list":
@@ -146,10 +243,42 @@ def dispatch(args: argparse.Namespace) -> int:
         return command_report(project_root, args.eval_id)
     if args.command == "close":
         return command_close(project_root, args.eval_id)
+    if args.command == "present":
+        case_dir = resolve_case(project_root, args.case)
+        destination = present_case(case_dir, args.output)
+        print(f"Rendered case study: {destination}")
+        return 0
+    if args.command == "pack":
+        case_dir = resolve_case(project_root, args.case)
+        presentation = None
+        if not args.without_presentation:
+            presentation = present_case(case_dir)
+        archive = pack_case(case_dir, args.output_dir, presentation_dir=presentation)
+        verified = verify_archive(archive)
+        print(f"Packed {archive}")
+        print(f"Content digest: {verified.content_digest}")
+        print(f"Archive SHA-256: {verified.archive_sha256}")
+        return 0
+    if args.command == "unpack":
+        cases_dir = args.cases_dir or project_root / "cases"
+        destination = unpack_archive(args.archive, cases_dir)
+        print(f"Unpacked case: {destination}")
+        return 0
+    if args.command == "fork":
+        cases_dir = args.cases_dir or project_root / "cases"
+        destination = fork_archive(
+            args.archive,
+            cases_dir,
+            args.publisher,
+            name=args.name,
+            version=args.version,
+        )
+        print(f"Created fork: {destination}")
+        return 0
     raise AssertionError(f"Unhandled command: {args.command}")
 
 
-def command_lint(path: Path) -> int:
+def command_lint(path: Path, *, portable: bool = False) -> int:
     resolved = path.resolve()
     project_root = find_project_root(resolved)
     if resolved.is_file() and resolved.name == "eval.yml":
@@ -164,10 +293,12 @@ def command_lint(path: Path) -> int:
         raise TamesuError(f"No eval.yml files found under {resolved}")
 
     failures: list[str] = []
+    case_dirs: set[Path] = set()
     for eval_path in eval_paths:
         eval_id = eval_id_from_path(project_root, eval_path)
         try:
             context = load_eval_context_from_path(project_root, eval_path)
+            case_dirs.add(context.case_dir)
             _render_all_prompts(context)
             print(f"ok  {eval_id}")
         except TamesuError as exc:
@@ -176,6 +307,10 @@ def command_lint(path: Path) -> int:
     if failures:
         print("\n".join(failures), file=sys.stderr)
         return 1
+    if portable:
+        for case_dir in sorted(case_dirs):
+            validate_portable(case_dir)
+            print(f"portable  {case_dir.name}")
     print(f"Validated {len(eval_paths)} eval(s).")
     return 0
 

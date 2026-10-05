@@ -45,7 +45,21 @@ under `runs/` or `logs/` as part of analysis.
 ## Write the analysis
 
 When the user requests a file, write `analysis.md` beside `eval.yml`. Keep it concise and
-open with a note that it is derived interpretation rather than evaluation evidence. Use
+open with YAML front matter binding it to the evidence you inspected:
+
+```yaml
+---
+evidence_digest: sha256:<digest>
+---
+```
+
+Compute the digest by hashing each current `runs/*/report.yml` and
+`runs/*/items/*/result.yml`, formatting canonical `<sha256>  <eval-relative-path>\n`
+inventory lines in bytewise path order, then hashing those inventory bytes. This is the
+same operation as `tamesu.presenting.evidence_digest`. Recompute it after the final
+evidence read and before writing. If the evidence changes afterward, presentation will
+correctly label the analysis stale. Keep the body concise and open with a note that it is
+derived interpretation rather than evaluation evidence. Use
 these sections when they help:
 
 1. **Question** — what the eval was intended to answer.

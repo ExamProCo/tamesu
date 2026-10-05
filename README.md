@@ -18,7 +18,9 @@ close to working while each iteration makes its feasibility less clear.
 
 > **Status:** Tamesu 0.1 implements structured-text evals with deterministic scoring and
 > first-party adapters for OpenAI, Anthropic, Google Gemini, xAI/Grok, Meta, and Amazon
-> Nova through Bedrock. Image tasks, model judges, and human review remain planned.
+> Nova through Bedrock. Cases can be rendered as static studies, packaged as reproducible
+> archives, and published through an inspectable static registry. Image tasks, model
+> judges, and human review remain planned.
 
 ## Why Tamesu exists
 
@@ -74,10 +76,13 @@ Case → Experiment → Eval → Run
 - [The Tamesu approach: from question to evidence](docs/approach.md)
 - [Core concepts](docs/concepts.md)
 - [Where Tamesu fits in the evaluation landscape](docs/landscape.md)
-- [Tutorial: run your first eval](docs/tutorial.md)
+- [Tutorial, Part 1: run your first eval](docs/tutorial.md)
+- [Tutorial, Part 2: present, package, and ship a case](docs/tutorial-presentation-packaging-shipping.md)
 - [Repository and file structure](docs/file-structure.md)
 - [Manifest reference](docs/manifests.md)
 - [Command-line interface](docs/cli.md)
+- [Presentation and case package contract](docs/packages.md)
+- [Tamesu Showcase registry](https://github.com/ExamProCo/tamesu-showcase)
 - [Configuration](docs/configuration.md)
 - [Using Tamesu with coding agents](docs/coding-agents.md)
 - [Providers and models](docs/providers.md)

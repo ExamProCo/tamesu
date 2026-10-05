@@ -1,4 +1,4 @@
-# Tutorial: run your first text eval
+# Tutorial, Part 1: run your first text eval
 
 > **Status:** This tutorial is runnable with Tamesu 0.1. Its live execution step uses the
 > Meta Model API and may incur cost.
@@ -83,6 +83,7 @@ support-ticket-classification/
     └── support-ticket-triage/
         ├── README.md
         ├── case.yml
+        ├── publication.yml
         ├── datasets/
         │   └── support-tickets-v1/
         │       └── dataset.yml
@@ -793,3 +794,7 @@ Use the [Manifest reference](manifests.md) for field details and the
 [CLI reference](cli.md) for full command behavior. Use
 [Logging and execution evidence](logging.md) to interpret a run timeline. Framework
 contributors should use the [Contributor development guide](development.md).
+
+Continue with [Part 2: present, package, and ship a case](tutorial-presentation-packaging-shipping.md)
+to turn the completed evidence into a reviewable website, a verifiable archive, and a
+static showcase publication.

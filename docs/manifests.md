@@ -97,6 +97,14 @@ title: Product Scanning Alignment
 description: >
   Generate plausible images of a person holding a product in one hand and aiming a
   handheld scanner at its barcode with the other.
+business_use: >
+  Product teams use the images in training material that demonstrates the intended
+  scanning workflow.
+current_problem: >
+  Generated images often show the wrong grip, scanner direction, or barcode alignment.
+technical_uncertainty: >
+  We do not know which prompting and reference-image strategy most consistently produces
+  the required pose and product relationship.
 default_task: image_generation
 ```
 
@@ -107,10 +115,15 @@ default_task: image_generation
 | `schema_version` | integer | Yes | Must be `1` |
 | `name` | string | Yes | Stable kebab-case case ID; must match the directory name |
 | `title` | string | Yes | Human-readable case title |
-| `description` | string | Yes | Problem statement and relevant context |
+| `description` | string | Yes | Concise description of what the case evaluates |
+| `business_use` | string | Yes | How the evaluated capability would be used in practice |
+| `current_problem` | string | Yes | Present pain or limitation that motivates the work |
+| `technical_uncertainty` | string | Yes | Unknown that the case's experiments are intended to resolve |
 | `default_task` | string | No | Task adapter used when an eval does not specify `task` |
 
-The case manifest does not select models, providers, prompts, or output locations.
+These narrative fields are separate so presentations can explain the case without
+guessing intent from a generic description or from a README outside the case. The case
+manifest does not select models, providers, prompts, or output locations.
 
 ## `dataset.yml`
 
@@ -621,3 +634,15 @@ Both must match for prior evidence to satisfy a current eval slot.
 For directory placement and file ownership, see
 [Repository and file structure](file-structure.md). For the hierarchy these manifests
 represent, see [Core concepts](concepts.md).
+
+## `publication.yml` and `package.yml`
+
+`publication.yml` is authored beside `case.yml` and controls how a case is presented and
+packaged. `package.yml` is generated inside a `.tamesu.tar.gz` archive. It copies the
+publication metadata and adds the selected profile, producing Tamesu version, sorted
+payload inventory, and content digest. Publication metadata never includes its own
+package digest, avoiding circular identity.
+
+The normative fields, inclusion rules, canonicalization algorithm, and consumer safety
+limits are documented in [Case packages](packages.md). Machine-readable definitions are
+in `schemas/publication.schema.json` and `schemas/package.schema.json`.

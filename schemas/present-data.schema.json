@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tamesu.dev/schemas/present-data.schema.json",
+  "title": "Tamesu presentation data",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tamesu_version", "case", "publication", "content_digest", "profile", "view_only", "datasets", "experiments", "totals"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "tamesu_version": {"type": "string"},
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "title", "summary", "description", "business_use", "current_problem", "technical_uncertainty", "readme"],
+      "properties": {
+        "name": {"type": "string"},
+        "title": {"type": "string"},
+        "summary": {"type": "string"},
+        "description": {"type": "string"},
+        "business_use": {"type": "string"},
+        "current_problem": {"type": "string"},
+        "technical_uncertainty": {"type": "string"},
+        "readme": {"type": ["string", "null"]}
+      }
+    },
+    "publication": {"type": "object"},
+    "content_digest": {"type": ["string", "null"]},
+    "profile": {"enum": ["full", "rescorable", "report-only"]},
+    "view_only": {"type": "boolean"},
+    "datasets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "description", "items", "path"],
+        "properties": {
+          "name": {"type": ["string", "null"]},
+          "description": {"type": ["string", "null"]},
+          "items": {"type": ["integer", "null"], "minimum": 0},
+          "path": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "experiments": {"type": "array", "items": {"type": "object", "required": ["id", "evals"]}},
+    "totals": {"type": "object"}
+  }
+}

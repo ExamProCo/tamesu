@@ -4,4 +4,16 @@ title: Support Ticket Triage
 description: >
   Classify synthetic customer-support messages by category and priority, and decide
   whether each ticket requires a human agent.
+business_use: >
+  A support team wants to use an AI model to add routing information to incoming support
+  messages so each ticket can reach the right queue with an appropriate urgency and
+  human-handoff decision.
+current_problem: >
+  Short support messages arrive without consistent category, priority, or human-handoff
+  metadata. A model can generate those fields, but inconsistent decisions would still
+  require manual triage and could misroute urgent customer problems.
+technical_uncertainty: >
+  We do not know whether giving the model explicit category, priority, escalation, and
+  precedence rules produces more accurate complete routing decisions than only listing
+  the required fields and allowed values.
 default_task: structured_text

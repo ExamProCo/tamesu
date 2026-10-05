@@ -27,7 +27,10 @@ directory; prompts and schemas are two levels above it.
 schema_version: 1
 name: <case>
 title: <human-readable title>
-description: <real-world problem this case represents>
+description: <concise description of what the case evaluates>
+business_use: <how the evaluated capability would be used in practice>
+current_problem: <present pain or limitation that motivates the work>
+technical_uncertainty: <unknown that the experiments are intended to resolve>
 default_task: structured_text
 ```
 

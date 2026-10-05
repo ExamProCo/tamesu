@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tamesu.dev/schemas/package.schema.json",
+  "title": "Tamesu package manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "content_digest", "profile", "tamesu_version", "inventory", "publication"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "profile": {"enum": ["full", "rescorable", "report-only"]},
+    "tamesu_version": {"type": "string"},
+    "inventory": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["path", "sha256", "size"], "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "size": {"type": "integer", "minimum": 0}}}},
+    "publication": {"$ref": "publication.schema.json"}
+  }
+}

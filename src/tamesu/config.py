@@ -106,7 +106,16 @@ def _reject_unknown(
 def _validate_case(case: dict[str, Any], case_dir: Path, errors: list[str]) -> None:
     _reject_unknown(
         case,
-        {"schema_version", "name", "title", "description", "default_task"},
+        {
+            "schema_version",
+            "name",
+            "title",
+            "description",
+            "business_use",
+            "current_problem",
+            "technical_uncertainty",
+            "default_task",
+        },
         "case",
         errors,
     )
@@ -117,6 +126,9 @@ def _validate_case(case: dict[str, Any], case_dir: Path, errors: list[str]) -> N
         errors.append(f"case.name must match directory name {case_dir.name!r}")
     _required_string(case, "title", "case", errors)
     _required_string(case, "description", "case", errors)
+    _required_string(case, "business_use", "case", errors)
+    _required_string(case, "current_problem", "case", errors)
+    _required_string(case, "technical_uncertainty", "case", errors)
     task = case.get("default_task")
     if task is not None and task not in SUPPORTED_TASKS:
         errors.append(f"case.default_task is not implemented: {task!r}")
@@ -380,6 +392,12 @@ def load_eval_context(project_root: Path, eval_id: str) -> EvalContext:
     experiment_dir = eval_dir.parent.parent
     case_dir = experiment_dir.parent.parent
     case_path = case_dir / "case.yml"
+
+    if (case_dir / "package-view.yml").is_file():
+        raise ConfigError(
+            f"{eval_id} belongs to a report-only, view-only package; "
+            "run and rescore require the withheld dataset and outputs"
+        )
 
     case = load_yaml(case_path)
     evaluation = load_yaml(path)
