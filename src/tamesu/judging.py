@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import math
 import re
+import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -217,13 +219,27 @@ def judge_eval(
             )
 
     workers = max(1, int(context.evaluation["defaults"]["concurrency"]))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        records = list(
-            executor.map(
-                lambda job: _judge_once(context, job[0], job[1], job[2], logs[job[1].run_id]),
-                jobs,
+    started = time.monotonic()
+    finished = 0
+    progress_lock = threading.Lock()
+
+    def run_job(job: tuple[JudgeSpec, JudgeTarget, int]) -> Any:
+        nonlocal finished
+        outcome = _judge_once(context, job[0], job[1], job[2], logs[job[1].run_id])
+        with progress_lock:
+            finished += 1
+            elapsed = time.monotonic() - started
+            eta = int(elapsed / finished * (len(jobs) - finished))
+            print(
+                f"  [judge {finished}/{len(jobs)}] {job[0].id} {job[1].item_id} "
+                f"{outcome[1]['status']}  elapsed {int(elapsed)}s eta {eta}s",
+                file=sys.stderr,
+                flush=True,
             )
-        )
+        return outcome
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        records = list(executor.map(run_job, jobs))
     for path, record in records:
         summary.judged += 1
         summary.judgment_paths.append(path)

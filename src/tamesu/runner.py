@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import platform
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -55,8 +56,8 @@ def run_eval(
     _check_budget(plan, tuple(specs))
     _check_credentials(specs)
     run_ids: list[str] = []
-    for spec in specs:
-        run_ids.append(execute_spec(context, spec))
+    for index, spec in enumerate(specs, start=1):
+        run_ids.append(execute_spec(context, spec, position=(index, len(specs))))
     return run_ids
 
 
@@ -65,6 +66,7 @@ def execute_spec(
     spec: RunSpec,
     *,
     existing_run_dir: Path | None = None,
+    position: tuple[int, int] | None = None,
 ) -> str:
     now = datetime.now(UTC)
     run_id = (
@@ -118,9 +120,20 @@ def execute_spec(
     selected = [(item_id, item_map[item_id]) for item_id in spec.item_ids]
     results: list[dict[str, Any]] = []
 
-    def work(item_id: str, item: dict[str, Any]) -> dict[str, Any]:
-        return _process_item(context, spec, run_id, run_dir, log, provider, item_id, item)
+    progress = _Progress(
+        total=len(selected),
+        header=(
+            f"run {position[0]}/{position[1]} " if position else "run "
+        )
+        + f"{spec.label} ({len(selected)} item(s), concurrency {spec.concurrency})",
+    )
 
+    def work(item_id: str, item: dict[str, Any]) -> dict[str, Any]:
+        result = _process_item(context, spec, run_id, run_dir, log, provider, item_id, item)
+        progress.item_done(item_id, result)
+        return result
+
+    progress.start()
     try:
         if spec.concurrency == 1 or len(selected) <= 1:
             for item_id, item in selected:
@@ -251,7 +264,64 @@ def execute_spec(
         except Exception:
             pass
         raise ExecutionError(f"Could not finalize run {run_id}: {safe_message}") from exc
+    progress.finish(state)
     return run_id
+
+
+class _Progress:
+    """Thread-safe progress lines on stderr; stdout stays reserved for results."""
+
+    def __init__(self, *, total: int, header: str) -> None:
+        self.total = total
+        self.header = header
+        self.done = 0
+        self.failed = 0
+        self.cost = 0.0
+        self.cost_known = True
+        self.started = time.monotonic()
+        self.lock = threading.Lock()
+
+    def start(self) -> None:
+        print(f"[{self.header}] started", file=sys.stderr, flush=True)
+
+    def item_done(self, item_id: str, result: dict[str, Any]) -> None:
+        state = result.get("state", "unknown")
+        cost = result.get("generation", {}).get("cost_usd")
+        with self.lock:
+            self.done += 1
+            if state != "complete":
+                self.failed += 1
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+                self.cost += cost
+            elif state == "complete":
+                self.cost_known = False
+            elapsed = time.monotonic() - self.started
+            remaining = self.total - self.done
+            eta = f" eta {_duration(elapsed / self.done * remaining)}" if remaining else ""
+            cost_text = f"${self.cost:.4f}" + ("" if self.cost_known else "+")
+            failed = f" failed={self.failed}" if self.failed else ""
+            print(
+                f"  [{self.done}/{self.total}] {item_id} {state}"
+                f"  elapsed {_duration(elapsed)}{eta}  cost {cost_text}{failed}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def finish(self, state: str) -> None:
+        print(
+            f"[{self.header}] {state} in {_duration(time.monotonic() - self.started)}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def _duration(seconds: float) -> str:
+    seconds = int(seconds)
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m{secs:02d}s" if minutes else f"{secs}s"
 
 
 def resume_run(context: EvalContext, run_id: str) -> str:
