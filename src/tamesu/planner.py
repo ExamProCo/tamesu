@@ -8,6 +8,7 @@ from . import __version__
 from .config import load_yaml, resolve_contained
 from .identity import digest_value, inventory_files
 from .models import EvalContext, Plan, RunSpec
+from .backends import backend_for
 from .tasks import get_task
 
 
@@ -112,10 +113,20 @@ def make_run_spec(
         "metrics": context.evaluation.get("metrics", {}),
         "probe": probe,
     }
+    backend_fields, backend_files = backend_for(context.evaluation).identity(
+        context,
+        provider=provider,
+        model=model,
+        prompts=prompts,
+        item_ids=item_ids,
+        parameters=parameters,
+    )
+    specification_payload.update(backend_fields)
     execution_paths = [
         *prompts.values(),
         Path(__file__).with_name("scoring.py"),
         *get_task(specification_task).code_files(),
+        *backend_files,
     ]
     if context.output_schema_path:
         execution_paths.append(context.output_schema_path)

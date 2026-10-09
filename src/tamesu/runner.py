@@ -13,14 +13,15 @@ from . import __version__
 from .artifacts import write_yaml
 from .config import load_yaml
 from .discovery import find_run_dir
+from .backends import BackendRun, backend_for
 from .errors import ExecutionError, ProviderError
 from .identity import digest_file
 from .logging import CallLogWriter
 from .models import EvalContext, RunSpec
 from .planner import build_plan, items_by_id, limit_spec
-from .providers import get_provider
+from .providers import get_provider  # noqa: F401  (patched by tests; native backend reads it here)
 from .pricing import estimate_plan_cost, recorded_cost
-from .run_report import build_report, sync_analysis_quietly
+from .run_report import build_report
 from .tasks import task_for
 
 
@@ -30,6 +31,7 @@ def run_eval(
     only: str | None = None,
     limit_items: int | None = None,
     force: bool = False,
+    trust_code: bool = False,
 ) -> list[str]:
     if context.evaluation["status"] != "active":
         raise ExecutionError(
@@ -54,7 +56,7 @@ def run_eval(
         return []
 
     _check_budget(plan, tuple(specs))
-    _check_credentials(specs)
+    backend_for(context.evaluation).check_ready(context, specs, trust_code=trust_code)
     run_ids: list[str] = []
     for index, spec in enumerate(specs, start=1):
         run_ids.append(execute_spec(context, spec, position=(index, len(specs))))
@@ -78,7 +80,6 @@ def execute_spec(
     run_dir = existing_run_dir or context.eval_dir / "runs" / run_id
     log_path = context.eval_dir / "logs" / f"{run_id}.jsonl"
     log = CallLogWriter(log_path)
-    provider = get_provider(spec.provider)
     started_at = _utc_now()
 
     previous_manifest: dict[str, Any] = {}
@@ -128,23 +129,20 @@ def execute_spec(
         + f"{spec.label} ({len(selected)} item(s), concurrency {spec.concurrency})",
     )
 
-    def work(item_id: str, item: dict[str, Any]) -> dict[str, Any]:
-        result = _process_item(context, spec, run_id, run_dir, log, provider, item_id, item)
-        progress.item_done(item_id, result)
-        return result
-
+    backend_run = BackendRun(
+        context=context,
+        spec=spec,
+        run_id=run_id,
+        run_dir=run_dir,
+        log=log,
+        selected=selected,
+        progress=progress,
+        resumed=existing_run_dir is not None,
+        results=results,
+    )
     progress.start()
     try:
-        if spec.concurrency == 1 or len(selected) <= 1:
-            for item_id, item in selected:
-                results.append(work(item_id, item))
-        else:
-            with ThreadPoolExecutor(max_workers=min(spec.concurrency, len(selected))) as executor:
-                futures = {
-                    executor.submit(work, item_id, item): item_id for item_id, item in selected
-                }
-                for future in as_completed(futures):
-                    results.append(future.result())
+        backend_for(context.evaluation).execute(backend_run)
     except KeyboardInterrupt:
         totals = _totals(results)
         manifest = _run_manifest(
@@ -221,7 +219,6 @@ def execute_spec(
     try:
         write_yaml(run_dir / "run.yml", manifest)
         build_report(context, run_dir, manifest)
-        sync_analysis_quietly(context)
         report_path = run_dir / "report.yml"
         log.append(
             "run_finished",
@@ -324,7 +321,7 @@ def _duration(seconds: float) -> str:
     return f"{minutes}m{secs:02d}s" if minutes else f"{secs}s"
 
 
-def resume_run(context: EvalContext, run_id: str) -> str:
+def resume_run(context: EvalContext, run_id: str, *, trust_code: bool = False) -> str:
     if context.evaluation["status"] != "active":
         raise ExecutionError("An eval must be active before a partial run can resume.")
     run_dir = find_run_dir(context.project_root, run_id)
@@ -369,7 +366,7 @@ def resume_run(context: EvalContext, run_id: str) -> str:
         )
 
     _check_budget(plan, (spec,))
-    _check_credentials([spec])
+    backend_for(context.evaluation).check_ready(context, [spec], trust_code=trust_code)
     return execute_spec(context, spec, existing_run_dir=run_dir)
 
 
@@ -607,7 +604,7 @@ def _run_manifest(
     finished_at: str | None,
     totals: dict[str, Any],
 ) -> dict[str, Any]:
-    return {
+    manifest = {
         "schema_version": 1,
         "run_id": run_id,
         "label": spec.label,
@@ -646,6 +643,12 @@ def _run_manifest(
         },
         "totals": totals,
     }
+    backend = backend_for(context.evaluation)
+    if backend.name != "native":
+        manifest["execution"] = backend.run_manifest_extra(
+            context, spec, context.eval_dir / "runs" / run_id
+        )
+    return manifest
 
 
 def _totals(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -667,14 +670,6 @@ def _totals(results: list[dict[str, Any]]) -> dict[str, Any]:
         "duration_ms": sum(latencies),
         "cost_usd": total_cost,
     }
-
-
-def _check_credentials(specs: list[RunSpec]) -> None:
-    for provider_name in sorted({spec.provider for spec in specs}):
-        provider = get_provider(provider_name)
-        error = provider.credential_error()
-        if error:
-            raise ExecutionError(f"{provider_name}: {error}")
 
 
 def _check_budget(plan: Any, specs: tuple[RunSpec, ...]) -> None:

@@ -16,6 +16,7 @@ from .structured_text import render_prompts
 class StructuredTextTask:
     name = "structured_text"
     prompt_roles = ("system", "user")
+    supported_backends = frozenset({"native"})
     supports_judges = False
     supports_review = False
     required_capabilities = frozenset({"text_output", "structured_output"})

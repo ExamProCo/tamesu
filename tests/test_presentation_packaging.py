@@ -130,7 +130,8 @@ class PresentationPackagingTests(unittest.TestCase):
     def test_existing_completed_runs_survive_case_narrative_changes(self) -> None:
         data = build_case_data(self.case)
         evaluation = data["experiments"][0]["evals"][0]
-        self.assertEqual(evaluation["status"], "complete")
+        self.assertEqual(evaluation["status"], "closed")  # the example's eval.yml says complete
+        self.assertEqual(evaluation["lifecycle"]["label"], "Closed")
         self.assertEqual(evaluation["coverage"]["banked"], 4)
         self.assertEqual(evaluation["coverage"]["owed"], 0)
 

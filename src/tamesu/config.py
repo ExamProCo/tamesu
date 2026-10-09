@@ -11,7 +11,8 @@ from .discovery import eval_id_from_path, eval_path
 from .errors import ConfigError
 from .models import EvalContext
 from .providers.models import registered, validate_effort
-from .tasks import TASKS, get_task
+from .backends import SUPPORTED_BACKENDS
+from .tasks import TASKS, get_task, supported_backends
 from .tasks.base import parse_mechanical_entry
 
 
@@ -185,6 +186,7 @@ def _validate_eval(
             "task",
             "dataset",
             "output_schema",
+            "execution",
             "defaults",
             "arms",
             "runs",
@@ -235,6 +237,21 @@ def _validate_eval(
         errors.append("eval.defaults.parameters must be a mapping")
 
     task_impl = get_task(task) if task in SUPPORTED_TASKS else None
+    backend_name = (evaluation.get("execution") or {}).get("backend", "native")
+    if not isinstance(evaluation.get("execution", {}), dict):
+        errors.append("eval.execution must be a mapping")
+        backend_name = "native"
+    if backend_name not in SUPPORTED_BACKENDS:
+        errors.append(f"eval.execution.backend is not implemented: {backend_name!r}")
+    else:
+        from .backends import get_backend
+
+        get_backend(backend_name).validate_eval(evaluation, eval_dir, project_root, errors)
+        if task_impl is not None and backend_name not in supported_backends(task_impl):
+            errors.append(
+                f"task {task_impl.name!r} does not support the {backend_name!r} execution backend "
+                f"(supported: {', '.join(sorted(supported_backends(task_impl)))})"
+            )
     output_schema_path: Path | None = None
     output_schema: dict[str, Any] | None = None
     if task_impl is not None:

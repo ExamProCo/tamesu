@@ -16,7 +16,8 @@ from .discovery import (
     find_project_root,
     find_run_dir,
 )
-from .errors import TamesuError
+from .backends import backend_for
+from .errors import ExecutionError, TamesuError
 from .environment import load_environment
 from .planner import build_plan
 from .packaging import (
@@ -78,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--only", metavar="MODEL")
     run_parser.add_argument("--limit-items", type=int, metavar="N")
     run_parser.add_argument("--force", action="store_true")
+    run_parser.add_argument(
+        "--trust-code",
+        action="store_true",
+        help="Allow an unpacked case's Inspect task Python to run on this machine.",
+    )
 
     judge_parser = subparsers.add_parser(
         "judge", help="Run model judges over stored images (paid; repeatable)."
@@ -126,6 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     resume_parser = subparsers.add_parser("resume", help="Continue a partial run.")
     resume_parser.add_argument("run_id")
+    resume_parser.add_argument("--trust-code", action="store_true", help="See `run --trust-code`.")
 
     rescore_parser = subparsers.add_parser("rescore", help="Rescore stored outputs.")
     rescore_parser.add_argument("run_id")
@@ -157,6 +164,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     present_parser.add_argument("case")
     present_parser.add_argument("--output", type=Path)
+    present_parser.add_argument("--open", action="store_true", help="Open the rendered page in a browser.")
+    present_parser.add_argument(
+        "--watch", action="store_true", help="Re-render whenever a file in the case changes (Ctrl-C to stop)."
+    )
+    present_parser.add_argument(
+        "--strict", action="store_true", help="Exit nonzero if any eval is invalid (the page is still written)."
+    )
+
+    analyze_parser = subparsers.add_parser(
+        "analyze",
+        help="Write analysis.md: a scaffold, or a model-assisted interpretation (calls a model).",
+    )
+    analyze_parser.add_argument("eval_id")
+    analyze_parser.add_argument("--scaffold", action="store_true", help="Create an authored template; no model call.")
+    analyze_parser.add_argument("--provider", help="Provider for the model-assisted analysis.")
+    analyze_parser.add_argument("--model", help="Model for the model-assisted analysis.")
+    analyze_parser.add_argument("--force", action="store_true", help="Replace an analysis a person wrote.")
+    analyze_parser.add_argument("--max-cost", type=float, default=0.25, help="Worst-case dollar limit.")
 
     pack_parser = subparsers.add_parser(
         "pack", help="Build a deterministic, verifiable case package."
@@ -276,6 +301,7 @@ def dispatch(args: argparse.Namespace) -> int:
             only=args.only,
             limit_items=args.limit_items,
             force=args.force,
+            trust_code=args.trust_code,
         )
     if args.command == "judge":
         return command_judge(
@@ -292,7 +318,7 @@ def dispatch(args: argparse.Namespace) -> int:
     if args.command == "status":
         return command_status(project_root, args.eval_id)
     if args.command == "resume":
-        return command_resume(project_root, args.run_id)
+        return command_resume(project_root, args.run_id, trust_code=args.trust_code)
     if args.command == "rescore":
         return command_rescore(project_root, args.run_id)
     if args.command == "compare":
@@ -306,10 +332,9 @@ def dispatch(args: argparse.Namespace) -> int:
             project_root, args.eval_id, allow_incomplete_review=args.allow_incomplete_review
         )
     if args.command == "present":
-        case_dir = resolve_case(project_root, args.case)
-        destination = present_case(case_dir, args.output)
-        print(f"Rendered case study: {destination}")
-        return 0
+        return command_present(project_root, args)
+    if args.command == "analyze":
+        return command_analyze(project_root, args)
     if args.command == "pack":
         case_dir = resolve_case(project_root, args.case)
         presentation = None
@@ -445,6 +470,7 @@ def command_plan(project_root: Path, eval_id: str) -> int:
     calls = sum(len(spec.item_ids) for spec in plan.owed_specs)
     print(f"Eval: {eval_id}")
     print(f"Status: {context.evaluation['status']}")
+    print(f"Execution backend: {backend_for(context.evaluation).name}")
     print(f"Models: {', '.join(models)}")
     print(f"Arms: {', '.join(arms)}")
     print(f"Planned runs: {len(plan.specs)}")
@@ -470,10 +496,17 @@ def command_plan(project_root: Path, eval_id: str) -> int:
     if plan.stale_run_ids:
         print(f"Stale runs: {len(plan.stale_run_ids)}")
     blockers: list[str] = []
-    for provider_name in sorted({spec.provider for spec in plan.owed_specs}):
-        error = get_provider(provider_name).credential_error()
-        if error:
-            blockers.append(f"{provider_name}: {error}")
+    backend = backend_for(context.evaluation)
+    if backend.name == "native":
+        for provider_name in sorted({spec.provider for spec in plan.owed_specs}):
+            error = get_provider(provider_name).credential_error()
+            if error:
+                blockers.append(f"{provider_name}: {error}")
+    else:
+        try:
+            backend.check_ready(context, list(plan.owed_specs), trust_code=False)
+        except ExecutionError as exc:
+            blockers.append(str(exc))
     if context.evaluation["status"] != "active":
         blockers.append(f"eval status is {context.evaluation['status']!r}")
     if blockers:
@@ -522,6 +555,7 @@ def command_run(
     only: str | None,
     limit_items: int | None,
     force: bool,
+    trust_code: bool = False,
 ) -> int:
     context = load_eval_context(project_root, eval_id)
     run_ids = run_eval(
@@ -529,6 +563,7 @@ def command_run(
         only=only,
         limit_items=limit_items,
         force=force,
+        trust_code=trust_code,
     )
     if not run_ids:
         print("No work owed. Use --force to create another fresh run.")
@@ -593,6 +628,9 @@ def command_run(
     incomplete = sum(count for state, count in states.items() if state != "complete")
     if incomplete:
         print(f"{incomplete} run(s) remain incomplete.", file=sys.stderr)
+        for run_id in run_ids:
+            if load_yaml(context.eval_dir / "runs" / run_id / "run.yml").get("state") == "partial":
+                print(f"Resume without repeating finished work: tamesu resume {run_id}", file=sys.stderr)
         print(f"Inspect all evidence: tamesu status {eval_id}", file=sys.stderr)
         return 1
     return 0
@@ -688,10 +726,68 @@ def command_review(project_root: Path, args: argparse.Namespace) -> int:
     return 0
 
 
+def command_present(project_root: Path, args: argparse.Namespace) -> int:
+    case_dir = resolve_case(project_root, args.case)
+
+    def render() -> Path:
+        return present_case(case_dir, args.output, strict=args.strict and not args.watch)
+
+    if args.watch:
+        from .present_watch import watch
+
+        destination = render()
+        if args.open:
+            _open_in_browser(destination)
+        print(f"Watching {case_dir} (Ctrl-C to stop)")
+        try:
+            watch(case_dir, render)
+        except KeyboardInterrupt:
+            print("stopped")
+        return 0
+    destination = render()
+    print(f"Rendered case study: {destination}")
+    if args.open:
+        _open_in_browser(destination)
+    return 0
+
+
+def _open_in_browser(destination: Path) -> None:
+    import webbrowser
+
+    webbrowser.open((destination / "index.html").as_uri())
+
+
+def command_analyze(project_root: Path, args: argparse.Namespace) -> int:
+    from . import analyze as analyze_module
+
+    context = load_eval_context(project_root, args.eval_id)
+    if args.scaffold:
+        print(f"Created {analyze_module.scaffold(context)}")
+        return 0
+    if not args.provider or not args.model:
+        raise TamesuError(
+            "Model-assisted analysis needs --provider and --model (it calls a model and costs money). "
+            "Use --scaffold for an authored template with no model call."
+        )
+    path, cost = analyze_module.analyze(
+        context, provider_name=args.provider, model=args.model, force=args.force, max_cost_usd=args.max_cost
+    )
+    spent = f"${cost:.4f}" if isinstance(cost, (int, float)) else "unknown cost"
+    print(f"Wrote {path} (model-assisted, {spent}). `tamesu present` labels it as such.")
+    return 0
+
+
 def command_status(project_root: Path, eval_id: str) -> int:
-    plan = build_plan(load_eval_context(project_root, eval_id))
+    context = load_eval_context(project_root, eval_id)
+    plan = build_plan(context)
     summary = status_summary(plan)
     counts = summary["counts"]
+    from .lifecycle import lifecycle_for
+
+    state = lifecycle_for(context, plan, counts)
+    print(f"State: {state.label} — {state.reason}")
+    for modifier in state.modifiers:
+        print(f"  {modifier}")
     for key in ("planned", "banked", "owed", "partial", "failed", "stale", "extra"):
         print(f"{key.capitalize()}: {counts[key]}")
     for run in summary["runs"]:
@@ -731,11 +827,11 @@ def _print_image_owed_work(plan: Any) -> None:
         print(f"evidence\t{run_id}\t" + " ".join(parts))
 
 
-def command_resume(project_root: Path, run_id: str) -> int:
+def command_resume(project_root: Path, run_id: str, *, trust_code: bool = False) -> int:
     run_dir = find_run_dir(project_root, run_id)
     manifest = load_yaml(run_dir / "run.yml")
     context = load_eval_context(project_root, manifest["eval_id"])
-    print(resume_run(context, run_id))
+    print(resume_run(context, run_id, trust_code=trust_code))
     return 0
 
 
@@ -817,9 +913,9 @@ def command_close(
         raise TamesuError(f"Could not update status in {eval_path}")
     write_text(eval_path, updated)
     closed_context = load_eval_context(project_root, eval_id)
-    from .run_report import sync_analysis_quietly
+    from .analysis import stamp_existing
 
-    sync_analysis_quietly(closed_context, stamp=True)  # evidence is final once closed
+    stamp_existing(closed_context)  # bind an existing analysis to the final evidence; never create one
     closed_plan = build_plan(closed_context)
     build_leaderboard(closed_plan)
     build_evaluation_report(closed_plan)

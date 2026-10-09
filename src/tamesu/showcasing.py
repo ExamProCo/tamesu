@@ -221,7 +221,7 @@ def build_site(registry_root: Path, output_dir: Path | None = None) -> Path:
                 shutil.copytree(record["path"] / "payload", stage_case)
                 write_yaml(stage_case / "publication.yml", publication)
                 page_dir = temporary / publisher / name / version
-                present_case(stage_case, page_dir)
+                present_case(stage_case, page_dir, include_text_artifacts=False)  # no logs or source on a public site
             finally:
                 shutil.rmtree(stage_root, ignore_errors=True)
             payload = _payload_bytes(record["path"] / "payload")

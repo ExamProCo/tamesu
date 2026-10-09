@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from .models import Plan, RunSpec
 from .planner import items_by_id
+from .backends import backend_for
 from .tasks import task_for
 
 
@@ -28,16 +29,17 @@ def estimate_plan_cost(plan: Plan, specs: tuple[RunSpec, ...] | None = None) -> 
     selected = plan.owed_specs if specs is None else specs
     item_map = items_by_id(plan.context)
     task = task_for(plan.context.evaluation, plan.context.case)
+    backend = backend_for(plan.context.evaluation)
     estimated = 0.0
     maximum = 0.0
     unknown: set[str] = set()
 
     for spec in selected:
-        attempts = spec.retries + 1
+        attempts = backend.max_attempts(spec)
         spec_estimated = 0.0
         spec_maximum = 0.0
         for item_id in spec.item_ids:
-            per_call = task.estimate_item_cost(plan.context, spec, item_map[item_id])
+            per_call = backend.estimate_item_cost(task, plan.context, spec, item_map[item_id])
             if per_call is None:
                 unknown.add(spec.model)
                 break

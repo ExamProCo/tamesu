@@ -20,7 +20,7 @@ from .errors import ExecutionError
 from .identity import digest_file
 from .models import EvalContext
 from .planner import build_plan, items_by_id
-from .tasks import task_for
+from .tasks import supports_promotion, task_for
 
 DESTINATION_PATTERN = re.compile(r"^([a-z0-9]+(?:-[a-z0-9]+)*)/([a-z0-9]+(?:-[a-z0-9]+)*)$")
 
@@ -36,7 +36,7 @@ class PromotionPlan:
 
 
 def plan_promotion(context: EvalContext, to: str) -> PromotionPlan:
-    if not task_for(context.evaluation, context.case).supports_review:
+    if not supports_promotion(task_for(context.evaluation, context.case)):
         raise ExecutionError(f"Task of {context.eval_id} has no accepted-image output to promote.")
     if context.evaluation["status"] != "complete":
         raise ExecutionError(

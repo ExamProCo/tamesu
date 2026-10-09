@@ -1,0 +1,32 @@
+schema_version: 1
+name: rendering-engine-visual
+rationale: rendering-engine-visual.md
+dimensions:
+  - id: deliberate-scene
+    question: >
+      The image shows a deliberate scene made of several distinct objects or surfaces. It is
+      not noise, a gradient, a single shape, a test pattern, or a nearly blank frame.
+    reason_codes: [blank-or-noise, single-primitive, test-pattern, other]
+  - id: depth-and-form
+    question: >
+      Objects read as three-dimensional forms placed in space: perspective, overlap, and
+      occlusion are consistent, and shapes are not distorted or flattened.
+    reason_codes: [flat, wrong-occlusion, distorted-geometry, other]
+  - id: lighting-visible
+    question: >
+      A light source visibly affects the scene. Shading varies across surfaces, and there
+      are highlights or shadows that agree with where the light seems to be.
+    reason_codes: [flat-colors, no-highlights-or-shadows, inconsistent-light, other]
+  - id: free-of-artifacts
+    question: >
+      No obvious rendering defects appear: no holes, black or white blotches, speckle,
+      banding stripes, tearing, or inverted shading.
+    reason_codes: [holes-or-black-patches, speckle-or-noise, banding-or-stripes, inverted-shading, other]
+  - id: striking-demo
+    question: >
+      The result looks like a deliberate, impressive lighting demonstration, with composition,
+      color, or effects such as reflections and soft shadows. It does not look like a
+      minimal technical test.
+    reason_codes: [minimal-test, dull-composition, other]
+acceptance:
+  rule: all_dimensions_pass

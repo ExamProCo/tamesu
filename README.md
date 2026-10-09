@@ -82,6 +82,8 @@ Case → Experiment → Eval → Run
 - [Manifest reference](docs/manifests.md)
 - [Command-line interface](docs/cli.md)
 - [Image evals: generate, judge, review, promote](docs/image-evals.md)
+- [Execution backends and Inspect AI](docs/execution-backends.md)
+- [What `present` is, and what it shows when](docs/present.md)
 - [Presentation and case package contract](docs/packages.md)
 - [Tamesu Showcase registry](https://github.com/ExamProCo/tamesu-showcase)
 - [Configuration](docs/configuration.md)

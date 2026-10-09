@@ -1,0 +1,60 @@
+schema_version: 1
+name: single-shot
+status: active
+question: >
+  What implementation does each Muse Spark version produce from one identical request,
+  and which response should advance to a controlled executable evaluation?
+description: >
+  Compare Muse Spark 1.3, 1.2, and 1.1 while holding the dataset item, prompt arm,
+  reasoning effort, output limit, timeout, repetition count, and retry policy fixed.
+  Native metrics measure artifact capture rather than C implementation quality; the
+  frozen manual rubric defines the downstream build-and-review step.
+
+task: structured_text
+dataset: ../../../../datasets/rendering-engine-prompt-v1/dataset.yml
+output_schema: ../../schemas/response.schema.json
+
+defaults:
+  repetitions: 1
+  concurrency: 3
+  timeout_seconds: 300
+  retries: 0
+  budget_usd: 0.25
+  parameters:
+    effort: high
+    max_tokens: 16000
+
+arms:
+  - id: verbatim-prompt
+    description: >
+      The supplied rendering-engine request, unchanged, with only a shared one-shot
+      response-packaging system instruction.
+    prompts:
+      system: ../../prompts/system.md
+      user: ../../prompts/user.md.j2
+
+runs:
+  - model: muse-spark-1.3
+    provider: meta
+    arms:
+      - verbatim-prompt
+  - model: muse-spark-1.2
+    provider: meta
+    arms:
+      - verbatim-prompt
+  - model: muse-spark-1.1
+    provider: meta
+    arms:
+      - verbatim-prompt
+
+evaluation:
+  mechanical:
+    - valid_json
+    - schema_valid
+
+metrics:
+  primary: generation_failure_rate
+  secondary:
+    - invalid_output_rate
+    - median_latency_ms
+    - mean_cost_usd

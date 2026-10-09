@@ -90,6 +90,15 @@ Written after an item's `result.yml` has been atomically persisted. It records t
 state, total attempts, and the result path and checksum. Failed items include their
 normalized error.
 
+### `inspect_log`
+
+Written once per Inspect attempt by the `inspect` execution backend, before its samples are
+ingested. It records the attempt number, the eval-relative path and SHA-256 of the Inspect
+`.eval` log, the log's own status (never treated as run success), the sample count, and the
+Inspect version. Per-call detail stays in Inspect's log. Inspect logs can contain full
+prompts and outputs, so they are never packaged; see
+[Execution backends](execution-backends.md).
+
 ### `framework_error`
 
 Written when execution machinery outside a provider attempt raises unexpectedly. Tamesu

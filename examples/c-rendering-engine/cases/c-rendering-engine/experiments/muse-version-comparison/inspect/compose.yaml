@@ -1,0 +1,15 @@
+services:
+  default:
+    image: gcc@sha256:9188ac751ca24431dc43dbd142a223c98ea74f01d2858e84d30ba342a0d67844
+    command: tail -f /dev/null
+    init: true
+    network_mode: none
+    working_dir: /work
+    user: "1000:1000"
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    read_only: true
+    tmpfs:
+      - /work:size=64m,exec,uid=1000,gid=1000,mode=0755
+      - /tmp:size=16m

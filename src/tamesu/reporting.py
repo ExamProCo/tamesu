@@ -207,6 +207,13 @@ def build_leaderboard(plan: Plan) -> Path:
     return path
 
 
+def _state_line(plan: Plan, counts: dict[str, int]) -> str:
+    from .lifecycle import lifecycle_for
+
+    state = lifecycle_for(plan.context, plan, counts)
+    return f"**{state.label}**. {state.reason}"
+
+
 def build_evaluation_report(plan: Plan) -> Path:
     rows = comparison_rows(plan)
     summary = status_summary(plan)
@@ -223,6 +230,7 @@ def build_evaluation_report(plan: Plan) -> Path:
         f"- Eval: `{plan.context.eval_id}`",
         f"- Dataset: `{plan.context.dataset['name']}` ({dataset_items} authored items)",
         f"- Status: `{plan.context.evaluation['status']}`",
+        f"- State: {_state_line(plan, counts)}",
         f"- Primary metric: `{primary}`",
         f"- Generated: `{_utc_now()}`",
         f"- Scorer: `tamesu {__version__}`",
@@ -386,14 +394,25 @@ def image_outcome(counts: dict[tuple[str, str], dict[str, int]]) -> tuple[str, s
         n = row["planned"]
         return f"{row['accepted']} of {n} images accepted ({row['accepted'] / n * 100:.1f}%)" if n else "no images"
 
-    ordered = sorted(counts, key=lambda k: counts[k]["accepted"] / counts[k]["planned"] if counts[k]["planned"] else 0, reverse=True)
     pending = sum(row["pending"] for row in counts.values())
+    total = sum(row["planned"] for row in counts.values())
+    single = all(row["planned"] == 1 for row in counts.values())
     notes: list[str] = []
     if pending:
-        notes.append(
-            f"{pending} image(s) still await required review and count as not accepted, so these "
-            "numbers will change."
+        # No acceptance result exists while required evidence is owed: never name a leader or
+        # a tie, and never summarize several rows by naming two of them.
+        summary = (
+            f"Review is incomplete: {pending} of {total} item(s) await required review or "
+            "judgment, so there is no acceptance result yet. Mechanical results are in the table."
         )
+        if single:
+            notes.append(SINGLE_SAMPLE_CAVEAT)
+        notes.append(
+            "Pending items count as not accepted in the rates below, so those numbers will change."
+        )
+        return summary, " ".join(notes)
+
+    ordered = sorted(counts, key=lambda k: counts[k]["accepted"] / counts[k]["planned"] if counts[k]["planned"] else 0, reverse=True)
     if len(ordered) == 1:
         key = ordered[0]
         only = counts[key]
@@ -402,6 +421,22 @@ def image_outcome(counts: dict[tuple[str, str], dict[str, int]]) -> tuple[str, s
             notes.append(
                 f"With only {only['planned']} image(s), a single image changes this result by "
                 f"{100 / only['planned']:.1f} percentage points."
+            )
+    elif len(ordered) >= 3:
+        low, high = ordered[-1], ordered[0]
+        a, b = counts[low], counts[high]
+        if a["accepted"] * b["planned"] == b["accepted"] * a["planned"]:
+            summary = f"All {len(ordered)} rows had the same acceptance: {share(a)}."
+        else:
+            summary = (
+                f"Across {len(ordered)} rows, acceptance ranges from {share(a)} ({label(low)}) "
+                f"to {share(b)} ({label(high)})."
+            )
+        smallest = min(row["planned"] for row in counts.values())
+        if smallest < SMALL_SAMPLE:
+            notes.append(
+                f"With only {smallest} image(s) per row, gaps this size are within what a single image "
+                "can change."
             )
     else:
         first, last = ordered[0], ordered[-1]
@@ -417,6 +452,8 @@ def image_outcome(counts: dict[tuple[str, str], dict[str, int]]) -> tuple[str, s
                     f"With only {smallest} image(s) per row, this gap is within what a single image can "
                     "change. It does not show that either row is better."
                 )
+    if single and len(ordered) > 1:
+        notes.append(SINGLE_SAMPLE_CAVEAT)
     notes.append(
         "Acceptance reflects the declared reviewers' judgments. This is an observed comparison; it "
         "does not establish why the rows differ or whether the result generalizes."
@@ -562,11 +599,21 @@ def _observed_result(rows: list[dict[str, Any]], primary: str) -> list[str]:
     first = ordered[0]
     last = ordered[-1]
     difference = abs(float(first["primary_mean"]) - float(last["primary_mean"]))
+    caveat = [SINGLE_SAMPLE_CAVEAT, ""] if single_sample(measured) else []
     if difference == 0:
         return [
             f"All reported rows recorded the same observed `{primary}` of "
             f"{_format_metric_value(primary, first['primary_mean'])}. No difference was "
-            "observed on the primary metric."
+            "observed on the primary metric.",
+            "",
+            *caveat,
+        ]
+    if len(measured) >= 3:
+        return [
+            metric_range_sentence(measured, primary),
+            "",
+            *caveat,
+            "This comparison reports an observed difference; it does not identify its cause.",
         ]
     direction = "highest" if reverse else "lowest"
     better = "Higher" if reverse else "Lower"
@@ -576,12 +623,39 @@ def _observed_result(rows: list[dict[str, Any]], primary: str) -> list[str]:
         f"from `{_row_label(last)}` was {_format_difference(primary, difference)}. "
         f"{better} values are treated as preferable for this metric.",
         "",
+        *caveat,
         "This comparison reports an observed difference; it does not identify its cause.",
     ]
 
 
 def _row_label(row: dict[str, Any]) -> str:
     return f"{row['model']} / {row['arm']}"
+
+
+SINGLE_SAMPLE_CAVEAT = (
+    "Each row has a single item and a single repetition, so this is not a comparison: it shows "
+    "what happened once, not how often."
+)
+
+
+def single_sample(rows: list[dict[str, Any]]) -> bool:
+    return bool(rows) and all(
+        int(row.get("items") or 0) == 1 and int(row.get("repetitions") or 0) == 1 for row in rows
+    )
+
+
+def metric_range_sentence(rows: list[dict[str, Any]], metric: str) -> str:
+    """Range over three or more rows: never name a subset as if it summarized the rest."""
+    measured = sorted(
+        (row for row in rows if _is_number(row.get("primary_mean"))),
+        key=lambda row: float(row["primary_mean"]),
+    )
+    low, high = measured[0], measured[-1]
+    return (
+        f"Across {len(measured)} rows, `{metric}` ranges from "
+        f"{_format_metric_value(metric, low['primary_mean'])} ({_row_label(low)}) to "
+        f"{_format_metric_value(metric, high['primary_mean'])} ({_row_label(high)})."
+    )
 
 
 def _is_number(value: Any) -> bool:

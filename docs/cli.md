@@ -32,7 +32,8 @@ current repository and keep all evaluation evidence inspectable on disk.
 | `leaderboard` | Rebuild an eval's Markdown leaderboard | Yes | No |
 | `report` | Build a human-readable eval report | Yes | No |
 | `close` | Verify completion and close an eval | Yes | No |
-| `present` | Render a static case study | Yes | No |
+| `present` | Render a static case study (offline, read-only, works before any run) | Yes | No |
+| `analyze` | Write `analysis.md`: an authored scaffold, or a model-assisted interpretation | Yes | `--scaffold`: No; with `--model`: **Yes** |
 | `pack` | Build a deterministic case archive | Yes | No |
 | `verify` | Safely validate an archive | No | No |
 | `unpack` | Safely extract a package into `cases/` | Yes | No |
@@ -54,6 +55,10 @@ tamesu lint --portable cases/support-ticket-triage
 tamesu pack support-ticket-triage
 tamesu verify build/packages/omenking-support-ticket-triage-1.0.0.tamesu.tar.gz
 ```
+
+`present` is offline and read-only and works before any run: see
+[What `present` is, and what it shows when](present.md). Flags: `--open`, `--watch`
+(re-render when a case file changes) and `--strict` (exit nonzero if an eval is invalid).
 
 `present` writes `build/present/<case>/index.html`, per-experiment pages, local assets,
 and `data.json`. Values from manifests, prompts, analyses, and outputs are escaped;
@@ -265,6 +270,11 @@ Before starting paid work, `run` performs the same validation and expansion as `
 - the selected provider credentials are unavailable;
 - the requested filters match no planned configuration.
 
+Evals that use the `inspect` execution backend also need `inspect-ai` and, for sandboxed
+tasks, a reachable Docker daemon. Cases created by `unpack` or `fork` refuse to run
+their Inspect tasks (executable Python) until you pass `--trust-code`. See
+[Execution backends](execution-backends.md).
+
 For registered models with known prices, `run` refuses to start when recorded known cost
 plus maximum priced exposure—configured output caps, planned retries, and estimated input
 usage—exceeds `budget_usd`. Unknown model prices are reported by `plan` and cannot be
@@ -340,7 +350,8 @@ Reconcile an eval's declared plan with evidence currently on disk.
 tamesu status support-ticket-triage/decision-rules/prompt-ablation
 ```
 
-Status classifies discovered runs as:
+The first line is the eval's lifecycle state (for example "Awaiting review"), the same one
+`present` and the evaluation report show. Status then classifies discovered runs as:
 
 - **banked** — complete and compatible with an owed run slot;
 - **partial** — compatible reusable work exists, but required items or stages are missing;
@@ -450,23 +461,17 @@ records.
 
 ## `analysis.md`
 
-`analysis.md`, next to `eval.yml`, is where *you* write the interpretation `present` shows
-under "Conclusion and next experiments". There is no manifest field for it, and for image
-evals you do not run a command to get one:
+`analysis.md`, next to `eval.yml`, is the interpretation `present` shows under "Conclusion and
+next experiments". There is no manifest field for it. It holds **authored or model-assisted
+prose only**; counts, costs and review status are computed live by `present`.
 
-- **It appears by itself.** As soon as an image eval has a banked run, `run` writes a draft:
-  the case's technical uncertainty, TODO prompts for your answer, what remains uncertain, and
-  next experiments.
-- **Its facts stay current.** The "Evidence at a glance" section (counts, the small-sample
-  caveat, per-dimension failures, judge-vs-human agreement, cost) is rewritten after every
-  `run`, `judge`, and `review import`. Everything outside that section is yours and is never
-  touched. If you delete the section, Tamesu leaves the file alone.
-- **`close` stamps it.** Closing records the evidence digest in the front matter, so the page
-  can say "matches the shown evidence". If you import another review after closing, the page
-  flags the analysis as no longer matching. While TODO lines remain, it is labelled an
-  unfinished draft.
-
-Text evals do not get an automatic file; write one by hand if you want a conclusion section.
+- **`run`, `judge` and `review import` never create or edit it.**
+- **Create it deliberately:** `tamesu analyze <eval> --scaffold` writes an authored template,
+  or `tamesu analyze <eval> --provider P --model M` has a model write it (costs money; see
+  [What `present` is](present.md)).
+- **`close` binds an existing file** to the final evidence by recording its digest, so the page
+  can say "matches the shown evidence". New evidence afterwards marks it stale. While TODO
+  lines remain it is labelled an unfinished draft.
 
 ## `tamesu promote`
 

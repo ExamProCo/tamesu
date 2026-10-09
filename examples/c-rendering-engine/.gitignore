@@ -1,0 +1,17 @@
+# Generated evaluation evidence for this example project.
+.env
+.tamesu/
+**/evals/*/runs/
+**/evals/*/logs/
+**/evals/*/review/
+**/evals/*/closing.yml
+**/evals/*/leaderboard.md
+**/evals/*/evaluation-report.md
+**/evals/*/analysis.md
+
+# Inspect AI scratch: transcripts, staged artifacts, bytecode.
+**/inspect/staging/
+__pycache__/
+
+# Derived presentation, package, and showcase output.
+build/

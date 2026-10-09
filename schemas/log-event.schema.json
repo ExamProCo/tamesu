@@ -24,7 +24,12 @@
     "error": {"type": ["object", "null"]},
     "artifacts": {"type": "array", "items": {"type": "object"}},
     "state": {"type": "string"},
-    "totals": {"type": "object"}
+    "totals": {"type": "object"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "path": {"type": "string", "minLength": 1},
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "samples": {"type": "integer", "minimum": 0},
+    "inspect_version": {"type": ["string", "null"]}
   },
   "allOf": [
     {
@@ -59,6 +64,10 @@
     {
       "if": {"properties": {"event": {"const": "item_finished"}}},
       "then": {"required": ["item_id", "state", "attempts", "result"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "inspect_log"}}},
+      "then": {"required": ["attempt", "path", "sha256", "status", "samples", "inspect_version"]}
     },
     {
       "if": {"properties": {"event": {"const": "framework_error"}}},

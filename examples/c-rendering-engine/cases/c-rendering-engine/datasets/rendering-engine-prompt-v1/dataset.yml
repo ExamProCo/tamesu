@@ -1,0 +1,16 @@
+schema_version: 1
+name: rendering-engine-prompt-v1
+description: >
+  One frozen systems-programming prompt used verbatim for a controlled, single-shot Muse
+  Spark version comparison.
+items:
+  - id: c-rendering-engine-lighting-demo
+    input:
+      prompt: >-
+        Build a rendering engine from scratch in C that writes pixels directly, scales from simple primitives to complex scenes, and culminates in a striking lighting demo.
+    expected:
+      response: ""
+    metadata:
+      language: c
+      task_family: systems-programming
+      interaction: single-shot

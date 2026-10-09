@@ -223,6 +223,11 @@ presentation, Tamesu labels a matching file **Analysis, matches the shown eviden
 missing or stale digest is labeled **Author commentary, not verified against these
 results** and is placed below the deterministic results.
 
+`run`, `judge` and `review import` never write `analysis.md`; create it with
+`tamesu analyze <eval> --scaffold` (or a model-written one with `--provider` and `--model`).
+The counts shown above it are computed live by `present`. See
+[What `present` is](present.md).
+
 You do not need an `analysis.md` to run or package an eval. The presentation always
 computes an observed outcome from compatible stored reports. A human-readable case study
 should also include an evidence-bound analysis that answers the technical uncertainty,

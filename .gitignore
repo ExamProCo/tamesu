@@ -10,3 +10,7 @@ __pycache__/
 htmlcov/
 build/
 dist/
+
+# Inspect transcripts hold full prompts and the git remote
+**/runs/*/inspect/
+**/inspect/staging/

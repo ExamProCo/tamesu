@@ -205,6 +205,8 @@ def collect_payload(case_dir: Path, profile: str) -> dict[str, bytes]:
             "publication.yml",
         }:
             continue
+        if _is_inspect_evidence(parts):
+            continue
         if profile == "rescorable" and ("logs" in parts or relative.endswith(".jsonl")):
             continue
         if profile == "report-only" and not _report_only_path(parts):
@@ -223,6 +225,19 @@ def collect_payload(case_dir: Path, profile: str) -> dict[str, bytes]:
             }
         )
     return dict(sorted(payload.items()))
+
+
+def _is_inspect_evidence(parts: tuple[str, ...]) -> bool:
+    """Inspect transcripts hold full prompts, outputs and the git remote; never package them.
+
+    Covers `runs/<run-id>/inspect/**` (logs, frozen dataset, staging) and any stray `.eval`.
+    """
+    if parts and parts[-1].endswith(".eval"):
+        return True
+    return any(
+        part == "runs" and len(parts) > index + 2 and parts[index + 2] == "inspect"
+        for index, part in enumerate(parts)
+    )
 
 
 def build_inventory(payload: dict[str, bytes]) -> list[dict[str, Any]]:
@@ -313,6 +328,11 @@ def unpack_archive(archive: Path, cases_dir: Path, *, case_name: str | None = No
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
         write_yaml(temporary / "publication.yml", verified.publication)
+        (temporary / ".untrusted-origin").write_text(
+            "Unpacked from a package. Inspect-backed evals run Python from this case on your "
+            "machine; review it, then use `tamesu run --trust-code` or delete this file.\n",
+            encoding="utf-8",
+        )
         temporary.rename(destination)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -652,10 +672,14 @@ def _validate_payload_manifests(
             continue
         evaluation = _payload_yaml(payload, path, required=True)
         base = PurePosixPath(path).parent
-        references: list[tuple[str, Any]] = [
-            ("dataset", evaluation.get("dataset")),
-            ("output_schema", evaluation.get("output_schema")),
-        ]
+        references: list[tuple[str, Any]] = [("dataset", evaluation.get("dataset"))]
+        if "output_schema" in evaluation:  # tasks without a response schema omit it
+            references.append(("output_schema", evaluation["output_schema"]))
+        execution = evaluation.get("execution")
+        if isinstance(execution, dict):
+            references.append(("execution.file", execution.get("file")))
+            for index, raw in enumerate(execution.get("sources") or []):
+                references.append((f"execution.sources[{index}]", raw))
         for index, arm in enumerate(evaluation.get("arms", [])):
             if not isinstance(arm, dict):
                 continue

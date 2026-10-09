@@ -13,15 +13,24 @@ from typing import Any
 import yaml
 
 from . import __version__
+from . import present_blocks as blocks
+from . import lifecycle as lc
+from .analysis import split_front_matter, strip_generated_facts
 from .artifacts import write_json, write_text
 from .config import load_eval_context_from_path, load_yaml
-from .errors import TamesuError
+from .errors import ConfigError, TamesuError
+from .present_design import build_design
+from .presenters import present_item
+from .present_facts import computed_facts
 from .packaging import SECRET_PATTERNS, build_inventory, collect_payload, inventory_digest, load_publication
 from .planner import build_plan
 from .pricing import estimate_plan_cost
 from .providers.models import PROVIDER_KEYS
 from .reporting import (
     LOWER_IS_BETTER_METRICS,
+    SINGLE_SAMPLE_CAVEAT,
+    metric_range_sentence,
+    single_sample,
     comparison_rows,
     image_outcome,
     image_row_counts,
@@ -110,6 +119,14 @@ code { font-size: .9em; }
 .card:last-child { border-bottom: 1px solid var(--border); }
 .card h3, .card h4 { margin-top: 0; }
 .status { font-weight: 700; }
+.status.invalid { color: #8a1c1c; }
+.status.draft { color: #6b5b00; }
+.status.ready { color: #1f4e79; }
+.status.awaiting-review, .status.partial { color: #8a4b00; }
+.status.evidence-complete, .status.closed { color: #1d5e2f; }
+.headline { color: #8a1c1c; font-size: 14px; }
+.excerpt { max-height: 22rem; }
+.design > summary { font-size: 1.05rem; }
 details { margin: .75rem 0; }
 summary { cursor: pointer; font-weight: 600; }
 .table-wrap { width: 100%; overflow-x: auto; }
@@ -195,9 +212,15 @@ def evidence_digest(eval_dir: Path) -> str:
     return inventory_digest(inventory)
 
 
-def build_case_data(case_dir: Path) -> dict[str, Any]:
+def build_case_data(case_dir: Path, *, include_text_artifacts: bool = True) -> dict[str, Any]:
     case_dir = case_dir.resolve()
     case = load_yaml(case_dir / "case.yml")
+    from .config import _validate_case
+
+    case_errors: list[str] = []
+    _validate_case(case, case_dir, case_errors)
+    if case_errors:  # a broken case.yml is not one eval's problem: refuse, with the reasons
+        raise ConfigError("Validation failed for case.yml:\n" + "\n".join(f"- {e}" for e in case_errors))
     publication = load_publication(case_dir, required=False) or {
         "name": case.get("name", case_dir.name),
         "publisher": "unpublished",
@@ -247,12 +270,18 @@ def build_case_data(case_dir: Path) -> dict[str, Any]:
                 totals["input_tokens"] += int(row.get("input_tokens") or 0)
                 totals["output_tokens"] += int(row.get("output_tokens") or 0)
         else:
-            context = load_eval_context_from_path(_project_root_for_case(case_dir), eval_path)
-            plan = build_plan(context)
-            summary = status_summary(plan)
-            rows = comparison_rows(plan)
-            counts = summary["counts"]
-            eval_data = _eval_data(context, plan, summary, rows)
+            try:
+                context = load_eval_context_from_path(_project_root_for_case(case_dir), eval_path)
+                plan = build_plan(context)
+                summary = status_summary(plan)
+                rows = comparison_rows(plan)
+                counts = summary["counts"]
+                eval_data = _eval_data(
+                    context, plan, summary, rows, include_text_artifacts=include_text_artifacts
+                )
+            except Exception as exc:  # noqa: BLE001 - one broken eval must not blank the page
+                eval_data = _invalid_eval(eval_path, exc, internal=not isinstance(exc, TamesuError))
+                rows, counts = [], {"planned": 0, "banked": 0, "owed": 0}
             totals["planned_runs"] += counts["planned"]
             totals["banked_runs"] += counts["banked"]
             totals["owed_runs"] += counts["owed"]
@@ -292,9 +321,20 @@ def build_case_data(case_dir: Path) -> dict[str, Any]:
     return _clean_tree(data)
 
 
-def present_case(case_dir: Path, output_dir: Path | None = None) -> Path:
+def present_case(
+    case_dir: Path,
+    output_dir: Path | None = None,
+    *,
+    strict: bool = False,
+    include_text_artifacts: bool = True,
+) -> Path:
+    """Render the case to static HTML. Offline and read-only: it writes only under the output.
+
+    `strict` still writes the page, then raises if any eval was invalid (for CI).
+    `include_text_artifacts=False` withholds logs and source from the rendering (public sites).
+    """
     case_dir = case_dir.resolve()
-    data = build_case_data(case_dir)
+    data = build_case_data(case_dir, include_text_artifacts=include_text_artifacts)
     if output_dir is None:
         project_root = _project_root_for_case(case_dir)
         destination = (
@@ -310,7 +350,7 @@ def present_case(case_dir: Path, output_dir: Path | None = None) -> Path:
         write_text(temporary / "assets" / "style.css", CSS)
         if not data["view_only"]:
             _copy_dataset_assets(case_dir, temporary / "assets" / "data")
-            _copy_item_images(case_dir, data, temporary)
+            _copy_assets(case_dir, data, temporary)
         write_json(temporary / "data.json", data)
         write_text(temporary / "index.html", _case_html(data))
         for experiment in data["experiments"]:
@@ -321,70 +361,127 @@ def present_case(case_dir: Path, output_dir: Path | None = None) -> Path:
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
+    if strict:
+        invalid = [
+            f"{experiment['id']}/{e['id']}: {'; '.join((e.get('lifecycle') or {}).get('errors', []))}"
+            for experiment in data["experiments"]
+            for e in experiment["evals"]
+            if e.get("status") == lc.INVALID
+        ]
+        if invalid:
+            raise TamesuError(
+                f"Rendered {destination}, but {len(invalid)} eval(s) are invalid:\n- " + "\n- ".join(invalid)
+            )
     return destination
 
 
-def _image_item_fields(
-    context: Any,
-    run_id: str,
-    result_path: Path,
-    result: dict[str, Any],
-    report_items: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    """Presentation fields for an image item: the stored image plus separate evidence columns."""
-    item_id = result_path.parent.name
-    entry = report_items.get(item_id, {})
-    output = result.get("output") if isinstance(result.get("output"), dict) else None
-    image = image_source = None
-    if output:
-        source = result_path.parent / str(output["path"])
-        try:
-            image_source = source.resolve().relative_to(context.case_dir.resolve()).as_posix()
-            image = f"assets/images/{run_id}/{item_id}{source.suffix}"
-        except ValueError:
-            image = None
-    human = entry.get("human") or {}
-    return {
-        "kind": "image",
-        "outcome": result.get("outcome"),
-        "image": image,
-        "image_source": image_source,
-        "model_judge": (entry.get("model_judge") or {}).get("verdict"),
-        "human": human.get("verdict") or human.get("state"),
-        "acceptance": entry.get("acceptance") or {},
-        "revised_prompt": (result.get("provider_response") or {}).get("revised_prompt"),
-    }
-
-
-def _copy_item_images(case_dir: Path, data: dict[str, Any], destination_root: Path) -> None:
+def _copy_assets(case_dir: Path, data: dict[str, Any], destination_root: Path) -> None:
+    """Copy files items asked to show. Sources must lie in the case; targets stay under assets/."""
+    root = case_dir.resolve()
+    base = (destination_root / "assets").resolve()
     for experiment in data.get("experiments", []):
         for evaluation in experiment.get("evals", []):
             for item in evaluation.get("items", []):
-                if not item.get("image") or not item.get("image_source"):
-                    continue
-                source = (case_dir / item["image_source"]).resolve()
-                try:
-                    source.relative_to(case_dir)
-                except ValueError:
-                    continue
-                if source.is_file():
-                    target = destination_root / item["image"]
+                for entry in item.pop("copy", []) or []:
+                    source = Path(entry["source"]).resolve()
+                    target = (destination_root / entry["target"]).resolve()
+                    try:
+                        source.relative_to(root)
+                        target.relative_to(base)
+                    except ValueError:
+                        continue
+                    if not source.is_file():
+                        continue
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(source, target)
+                    limit = int(entry.get("max_bytes") or 0)
+                    if limit:
+                        with source.open("rb") as stream:
+                            payload = stream.read(limit + 1)
+                        if len(payload) > limit:
+                            payload = payload[:limit] + b"\n[truncated: file is larger than the presentation limit]\n"
+                        text = blocks.sanitize_text(payload.decode("utf-8", errors="replace"))
+                        target.write_text(text, encoding="utf-8")
+                    else:
+                        shutil.copyfile(source, target)
 
 
-def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _invalid_eval(eval_path: Path, exc: Exception, *, internal: bool = False) -> dict[str, Any]:
+    """A card for an eval that cannot be loaded: the reason, and whatever raw fields are readable."""
+    root = str(eval_path.parents[6]) + "/"
+    message = str(exc).replace(root, "")  # never print the author's local directory into a page
+    errors = [blocks.sanitize_text(line[2:].strip()) for line in message.splitlines() if line.startswith("- ")] or [
+        blocks.sanitize_text(message.splitlines()[0] if message else type(exc).__name__)
+    ]
+    try:
+        raw = load_yaml(eval_path)
+    except Exception:  # noqa: BLE001
+        raw = {}
+    state = lc.invalid(errors)
+    if internal:
+        # Not the author's mistake: say so, so nobody hunts for a problem in their manifest.
+        errors = [f"internal error while building this page: {type(exc).__name__}: {blocks.sanitize_text(str(exc).replace(root, ''))}"]
+        state = lc.Lifecycle(
+            lc.INVALID, lc.LABELS[lc.INVALID],
+            "Tamesu could not build this eval's page because of an internal error, not because the eval is "
+            "invalid. Please report it.", errors=tuple(errors),
+        )
+    eval_id = eval_path.parent.name
+    return {
+        "id": eval_id,
+        "eval_id": "/".join((eval_path.parents[4].name, eval_path.parents[2].name, eval_id)),
+        "question": raw.get("question") or "(unreadable)",
+        "description": raw.get("description") or "",
+        "status": state.state,
+        "lifecycle": state.as_dict(),
+        "primary_metric": (raw.get("metrics") or {}).get("primary") if isinstance(raw.get("metrics"), dict) else None,
+        "observed_outcome": {"summary": "This eval could not be loaded, so nothing can be shown for it.", "caveat": state.reason},
+        "leader": None,
+        "coverage": {},
+        "rows": [],
+        "dataset": {"name": None, "description": None, "items": None, "path": raw.get("dataset")},
+        "method": {
+            "task": raw.get("task"),
+            "arms": raw.get("arms") if isinstance(raw.get("arms"), list) else [],
+            "runs": [],
+            "defaults": {},
+            "metrics": raw.get("metrics") if isinstance(raw.get("metrics"), dict) else {},
+            "output_schema": raw.get("output_schema"),
+            "prompts": [],
+        },
+        "items": [],
+        "evidence_runs": [],
+        "analysis": None,
+        "facts": [],
+        "design": None,
+        "reproduce": None,
+    }
+
+
+def _eval_data(
+    context: Any,
+    plan: Any,
+    summary: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    include_text_artifacts: bool = True,
+) -> dict[str, Any]:
     evaluation = context.evaluation
     counts = summary["counts"]
-    state = "complete" if not counts["owed"] and counts["banked"] == counts["planned"] else "partial" if counts["banked"] or counts["partial"] or counts["failed"] else "not-run"
+    state = lc.lifecycle_for(context, plan, counts)
     primary = evaluation["metrics"]["primary"]
+    task = task_for(evaluation, context.case)
     measured = [row for row in rows if isinstance(row.get("primary_mean"), (int, float))]
     reverse = primary not in LOWER_IS_BETTER_METRICS
-    leader = sorted(measured, key=lambda row: float(row["primary_mean"]), reverse=reverse)[0] if measured else None
+    # A leader is named only when the result is decided: not while evidence is owed, not from a
+    # single sample, and never before anything has run.
+    leader = (
+        sorted(measured, key=lambda row: float(row["primary_mean"]), reverse=reverse)[0]
+        if measured and state.state not in lc.NO_RESULT_STATES and not state.pending_items and not single_sample(measured)
+        else None
+    )
     for row in rows:
         row.update(_token_totals(context.eval_dir, row.get("run_ids", [])))
     analysis = _analysis_data(context.eval_dir)
-    image_eval = task_for(context.evaluation, context.case).supports_review
     items: list[dict[str, Any]] = []
     evidence_runs: list[dict[str, Any]] = []
     dataset_items = {
@@ -402,9 +499,8 @@ def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict
         if not isinstance(resolved, dict):
             resolved = {}
         run_items: list[dict[str, Any]] = []
-        is_image_eval = task_for(context.evaluation, context.case).supports_review
         report_items: dict[str, dict[str, Any]] = {}
-        if is_image_eval and (run_dir / "report.yml").is_file():
+        if (run_dir / "report.yml").is_file():
             report_items = {
                 str(entry.get("item_id")): entry
                 for entry in load_yaml(run_dir / "report.yml").get("items", [])
@@ -414,6 +510,19 @@ def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict
             result = load_yaml(result_path)
             output_path = result_path.parent / "output.txt"
             dataset_item = dataset_items.get(result_path.parent.name, {})
+            view = present_item(
+                task.name,
+                blocks.ItemContext(
+                    eval_dir=context.eval_dir,
+                    case_dir=context.case_dir,
+                    item_dir=result_path.parent,
+                    run_id=run_id,
+                    result=result,
+                    item=dataset_item,
+                    report_entry=report_items.get(result_path.parent.name, {}),
+                    include_text_artifacts=include_text_artifacts,
+                )
+            )
             item_data = {
                 "run_id": run_id,
                 "model": resolved.get("model"),
@@ -426,9 +535,9 @@ def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict
                 "expected": dataset_item.get("expected"),
                 "assets": dataset_item.get("assets", []),
                 "output": _clean_untrusted(output_path.read_text(encoding="utf-8", errors="replace")) if output_path.is_file() else None,
+                "view": view.as_dict(),
+                "copy": view.copy,
             }
-            if is_image_eval:
-                item_data.update(_image_item_fields(context, run_id, result_path, result, report_items))
             items.append(item_data)
             run_items.append(item_data)
         selection = run.get("selection")
@@ -451,6 +560,7 @@ def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict
                 "output_tokens": usage["output_tokens"],
                 "cost_usd": run_totals.get("cost_usd"),
                 "duration_ms": run_totals.get("duration_ms"),
+                "execution": _execution_provenance(run),
                 "items": run_items,
             }
         )
@@ -470,14 +580,26 @@ def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict
             )
         }
     )
+    review = bool(task.supports_review)
+    if state.state in lc.NO_RESULT_STATES:
+        outcome = {
+            "summary": "Nothing has run yet, so this eval has no result. The design below is what will be run.",
+            "caveat": state.reason,
+        }
+    elif review:
+        outcome = _image_observed_outcome(plan)
+    else:
+        outcome = _observed_outcome(rows, primary)
+    facts = computed_facts(plan, review=review) if plan.banked_run_ids else []
     return {
         "id": context.eval_dir.name,
         "eval_id": context.eval_id,
         "question": evaluation.get("question"),
         "description": evaluation.get("description"),
-        "status": state,
+        "status": state.state,
+        "lifecycle": state.as_dict(),
         "primary_metric": primary,
-        "observed_outcome": _image_observed_outcome(plan) if image_eval else _observed_outcome(rows, primary),
+        "observed_outcome": outcome,
         "leader": {"model": leader["model"], "arm": leader["arm"], "value": leader["primary_mean"]} if leader else None,
         "coverage": counts,
         "rows": rows,
@@ -499,12 +621,33 @@ def _eval_data(context: Any, plan: Any, summary: dict[str, Any], rows: list[dict
         "items": items,
         "evidence_runs": evidence_runs,
         "analysis": analysis,
+        "facts": facts,
+        "design": build_design(context, plan, state),
         "reproduce": {
             "commands": [f"tamesu plan {context.eval_id}", f"tamesu run {context.eval_id}", f"tamesu rescore <run-id>"],
             "environment": required_environment,
             "estimated_cost_usd": cost.estimated_usd if cost.fully_priced else None,
             "maximum_cost_usd": cost.maximum_usd if cost.fully_priced else None,
         },
+    }
+
+
+def _execution_provenance(run: dict[str, Any]) -> dict[str, Any] | None:
+    execution = run.get("execution")
+    if not isinstance(execution, dict):
+        return None
+    logs = [
+        {"attempt": entry.get("attempt"), "status": entry.get("status"), "sha256": entry.get("sha256"), "samples": entry.get("samples")}
+        for entry in execution.get("logs", [])
+        if isinstance(entry, dict)
+    ]
+    return {
+        "backend": execution.get("backend"),
+        "inspect_version": execution.get("inspect_version"),
+        "adapter_version": execution.get("adapter_version"),
+        "model_uri": execution.get("model_uri"),
+        "base_url_origin": execution.get("base_url_origin"),
+        "logs": logs,
     }
 
 
@@ -534,12 +677,23 @@ def _view_only_eval(eval_path: Path) -> dict[str, Any]:
     primary = evaluation.get("metrics", {}).get("primary")
     measured = [row for row in rows if isinstance(row.get("primary_mean"), (int, float))]
     reverse = primary not in LOWER_IS_BETTER_METRICS
-    leader = sorted(measured, key=lambda row: float(row["primary_mean"]), reverse=reverse)[0] if measured else None
+    leader = (
+        sorted(measured, key=lambda row: float(row["primary_mean"]), reverse=reverse)[0]
+        if measured and not single_sample(measured)
+        else None
+    )
+    closed = evaluation.get("status") == "complete"
+    view_state = lc.Lifecycle(
+        lc.CLOSED if closed else lc.EVIDENCE_COMPLETE if rows else lc.DRAFT,
+        lc.LABELS[lc.CLOSED if closed else lc.EVIDENCE_COMPLETE if rows else lc.DRAFT],
+        "Report-only package: outputs and review state are withheld.",
+    )
     return {
         "id": eval_path.parent.name,
         "eval_id": "/".join((eval_path.parents[4].name, eval_path.parents[2].name, eval_path.parent.name)),
         "question": evaluation.get("question"), "description": evaluation.get("description"),
-        "status": "complete" if rows else "not-run", "primary_metric": primary,
+        "status": view_state.state, "lifecycle": view_state.as_dict(), "facts": [], "design": None,
+        "primary_metric": primary,
         "observed_outcome": _observed_outcome(rows, primary),
         "leader": {"model": leader["model"], "arm": leader["arm"], "value": leader["primary_mean"]} if leader else None,
         "coverage": {}, "rows": rows, "dataset": {"name": "withheld", "description": None, "items": None, "path": None},
@@ -549,36 +703,35 @@ def _view_only_eval(eval_path: Path) -> dict[str, Any]:
 
 
 def _analysis_data(eval_dir: Path) -> dict[str, Any] | None:
+    """The authored or model-assisted interpretation, labelled with who wrote it."""
     path = eval_dir / "analysis.md"
     if not path.is_file():
         return None
     source = path.read_text(encoding="utf-8", errors="replace")
-    metadata: dict[str, Any] = {}
-    body = source
-    if source.startswith("---\n"):
-        closing = source.find("\n---\n", 4)
-        if closing >= 0:
-            try:
-                loaded = yaml.safe_load(source[4:closing])
-                if isinstance(loaded, dict):
-                    metadata = loaded
-                    body = source[closing + 5 :]
-            except yaml.YAMLError:
-                pass
+    metadata, body = split_front_matter(source)
+    body = strip_generated_facts(body)  # older files embedded a generated section; the live one replaces it
     digest = evidence_digest(eval_dir)
     matches = metadata.get("evidence_digest") == digest
+    assisted = metadata.get("generated_by") == "model"
     unfinished = any(re.search(r"\bTODO\b", line) for line in body.splitlines())
-    if unfinished:
+    if assisted:
+        who = f"Model-assisted analysis ({metadata.get('model', 'unknown model')}), written {metadata.get('created_at', 'at an unknown time')}"
+        label = f"{who}; matches the shown evidence" if matches else f"{who}; STALE: the evidence changed after it was written"
+    elif unfinished:
         label = "Draft analysis: unfinished (TODO lines remain)"
     elif matches:
         label = "Analysis, matches the shown evidence"
     else:
         label = "Author commentary, not verified against these results"
     return {
+        "kind": "assisted" if assisted else "authored",
         "label": label,
         "matches_evidence": matches,
         "evidence_digest": digest,
         "declared_evidence_digest": metadata.get("evidence_digest"),
+        "generated_by": metadata.get("generated_by"),
+        "model": metadata.get("model"),
+        "created_at": metadata.get("created_at"),
         "body": _clean_untrusted(body),
     }
 
@@ -589,11 +742,13 @@ def _case_html(data: dict[str, Any]) -> str:
     cards = []
     for experiment in data["experiments"]:
         evals = "".join(
-            f"<li><span class=\"status {_e(e['status'])}\">{_e(str(e['status']).replace('-', ' ').title())}</span> — {_e(e['question'])}"
-            + (f" — leader: {_e(e['leader']['model'])} / {_e(e['leader']['arm'])} ({_number(e['leader']['value'])})" if e.get("leader") else "") + "</li>"
+            f"<li>{_badge(e)} — {_e(e['question'])}"
+            + (f" — leader: {_e(e['leader']['model'])} / {_e(e['leader']['arm'])} ({_number(e['leader']['value'])})" if e.get("leader") else "")
+            + f"<br><span class=\"muted\">{_e((e.get('lifecycle') or {}).get('reason'))}</span></li>"
             for e in experiment["evals"]
         )
-        cards.append(f"<article class=\"card\"><h3><a href=\"experiments/{_attr(experiment['id'])}.html\">{_e(experiment['title'])}</a></h3><ul>{evals}</ul></article>")
+        summary = lc.summarize([str(e["status"]) for e in experiment["evals"]])
+        cards.append(f"<article class=\"card\"><h3><a href=\"experiments/{_attr(experiment['id'])}.html\">{_e(experiment['title'])}</a></h3><p class=\"muted\">{_e(summary)}</p><ul>{evals}</ul></article>")
     lineage = publication.get("forked_from")
     package_rows: list[tuple[str, Any]] = [
         ("Publisher", publication.get("publisher")),
@@ -646,9 +801,159 @@ def _case_html(data: dict[str, Any]) -> str:
     )
 
 
+def _badge(evaluation: dict[str, Any]) -> str:
+    state = evaluation.get("lifecycle") or {}
+    label = state.get("label") or str(evaluation.get("status", "")).replace("-", " ").title()
+    return f"<span class=\"status {_attr(evaluation.get('status'))}\">{_e(label)}</span>"
+
+
+def _facts_html(lines: list[str]) -> str:
+    """Computed facts: "- " bullets with optional "  - " children, rendered as a nested list."""
+    top: list[tuple[str, list[str]]] = []
+    for line in lines:
+        if line.startswith("  - "):
+            if top:
+                top[-1][1].append(line[4:].strip())
+        elif line.startswith("- "):
+            top.append((line[2:].strip(), []))
+    items = ""
+    for text, children in top:
+        kids = "<ul>" + "".join(f"<li>{_inline_markup(c)}</li>" for c in children) + "</ul>" if children else ""
+        items += f"<li>{_inline_markup(text)}{kids}</li>"
+    return f"<ul>{items}</ul>" if items else ""
+
+
+def _design_html(evaluation: dict[str, Any]) -> str:
+    design = evaluation.get("design")
+    if not design:
+        return ""
+    eid = evaluation["id"]
+    open_attr = " open" if evaluation["status"] in lc.NO_RESULT_STATES else ""
+    matrix_rows = "".join(
+        f"<tr><td>{_e(r['model'])}</td><td>{_e(r['provider'])}</td><td><code>{_e(r['arm'])}</code></td>"
+        f"<td>{_e(r['repetitions'])}</td><td>{_e(r['items'])}</td><td>{_e(r['banked'])} / {_e(r['owed'])}</td>"
+        f"<td><code>{_e(json.dumps(r['parameters'], sort_keys=True))}</code></td></tr>"
+        for r in design["matrix"]
+    )
+    matrix = (
+        '<div class="table-wrap"><table><thead><tr><th>Model</th><th>Provider</th><th>Arm</th><th>Repetitions</th>'
+        f'<th>Items</th><th>Banked / owed</th><th>Parameters</th></tr></thead><tbody>{matrix_rows}</tbody></table></div>'
+    )
+    shown = design["items"]["shown"]
+    inline = shown[:25]
+    item_rows = "".join(
+        f"<tr><td><code>{_e(i['id'])}</code></td><td>{_e(_short(i['input']))}</td><td>{_e(_short(i['expected']))}</td></tr>"
+        for i in inline
+    )
+    more = design["items"]["total"] - len(inline)
+    items_html = (
+        f'<p>{_e(design["items"]["total"])} item(s).</p><div class="table-wrap"><table><thead><tr><th>Item</th><th>Input</th>'
+        f'<th>Expected</th></tr></thead><tbody>{item_rows}</tbody></table></div>'
+        + (f'<p class="muted">{_e(more)} more item(s) are in the dataset file.</p>' if more > 0 else "")
+    )
+    previews = ""
+    for preview in design["prompt_preview"]:
+        if "error" in preview:
+            previews += f'<article class="card"><h4><code>{_e(preview["arm"])}</code></h4><p class="notice">This arm cannot render its prompt: {_e(preview["error"])}</p></article>'
+            continue
+        roles = "".join(
+            f"<details><summary>{_e(role.title())} · item <code>{_e(preview['item_id'])}</code></summary><pre>{_e(text)}</pre></details>"
+            for role, text in preview["prompts"].items()
+        )
+        previews += f'<article class="card"><h4><code>{_e(preview["arm"])}</code></h4><p class="muted">Exactly what a model is sent for the first item.</p>{roles}</article>'
+    scoring = design["scoring"]
+    mech = "".join(
+        f"<li><code>{_e(m['name'])}</code>" + (f" <span class=\"muted\">{_e(json.dumps(m['parameters'], sort_keys=True))}</span>" if m["parameters"] else "") + "</li>"
+        for m in scoring["mechanical"]
+    )
+    review = scoring.get("human_review")
+    if review and "error" in review:
+        review_html = f'<p class="notice">Review rubric cannot be loaded: {_e(review["error"])}</p>'
+    elif review:
+        dims = "".join(
+            f"<tr><td><code>{_e(d['id'])}</code></td><td>{_e(d['question'])}</td><td>{_e(', '.join(d['reason_codes']))}</td></tr>"
+            for d in review["dimensions"]
+        )
+        review_html = (
+            f'<h4>Blinded human review: <code>{_e(review["rubric"])}</code></h4><div class="table-wrap"><table><thead><tr><th>Dimension</th>'
+            f'<th>Question</th><th>Failure reasons</th></tr></thead><tbody>{dims}</tbody></table></div>'
+        )
+    else:
+        review_html = ""
+    acceptance = scoring.get("acceptance")
+    acceptance_html = (
+        f'<p>Acceptance requires: {_e(", ".join(acceptance["requires"]))}; {_e(acceptance["required_reviews_per_item"])} '
+        f'review(s) per item; disagreement: {_e(acceptance["on_disagreement"])}.</p>'
+        if acceptance
+        else ""
+    )
+    judges = scoring.get("model_judges") or []
+    judges_html = (
+        "<p>Model judges: " + ", ".join(f"<code>{_e(j['id'])}</code> ({_e(j['role'])})" for j in judges) + "</p>" if judges else ""
+    )
+    execution = design["execution"]
+    exec_rows: list[tuple[str, Any]] = [("Backend", execution["backend"])]
+    if execution["backend"] == "inspect":
+        exec_rows += [
+            ("Inspect task", f"{execution['file']} :: {execution['task']}"),
+            ("Inspect version", execution.get("inspect_version") or "not installed"),
+            ("Declared sources", ", ".join(execution["sources"])),
+            ("Limits", json.dumps(execution["limits"], sort_keys=True)),
+            ("Artifact roles", json.dumps(execution["artifacts"], sort_keys=True)),
+        ]
+        for image in execution["images"]:
+            exec_rows.append((f"Image ({image['source']})", f"{image['image']} — {'pinned' if image['pinned'] else 'MUTABLE TAG'}"))
+        for route in execution["routes"]:
+            exec_rows.append((f"Route {route['model']}", f"{route.get('model_uri')} at {route.get('base_url_origin') or 'provider default'}"))
+        exec_rows.append(("Not checked by this page", ", ".join(execution["not_checked"])))
+    else:
+        for route in execution["routes"]:
+            exec_rows.append((f"Provider for {route['model']}", route["provider"]))
+    cost = design["cost"]
+    cost_rows = [
+        ("Budget ceiling", _money(cost["budget_usd"])),
+        ("Estimated cost of the full design", _money(cost["design_estimated_usd"])),
+        ("Maximum exposure of the full design", _money(cost["design_maximum_usd"])),
+        ("Recorded so far", _money(cost["recorded_known_usd"])),
+    ]
+    if cost["unknown_pricing"]:
+        cost_rows.append(("Unknown pricing", ", ".join(cost["unknown_pricing"])))
+    blockers = design["blockers"]
+    blockers_html = (
+        '<p class="notice">Blockers: ' + "; ".join(_e(b) for b in blockers) + "</p>" if blockers else '<p class="muted">No static blockers.</p>'
+    )
+    return (
+        f'<h2 id="{_attr(eid)}-design">Design</h2>'
+        f'<details class="design"{open_attr}><summary>What will run, what is sent, how it is judged and what it can cost</summary>'
+        f'<h3>Run matrix</h3>{matrix}<h3>Dataset</h3>{items_html}<h3>Prompts sent</h3>{previews or "<p>No arms.</p>"}'
+        f'<h3>How it is judged</h3><ul>{mech}</ul>{judges_html}{review_html}{acceptance_html}'
+        f'<h3>How it executes</h3>{_key_values(exec_rows)}<h3>Cost and blockers</h3>{_key_values(cost_rows)}{blockers_html}</details>'
+    )
+
+
+def _short(value: Any, limit: int = 160) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, sort_keys=True, ensure_ascii=False) if value is not None else ""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def _experiment_html(data: dict[str, Any], experiment: dict[str, Any]) -> str:
     sections: list[str] = []
     for evaluation in experiment["evals"]:
+        state = evaluation.get("lifecycle") or {}
+        reason = f'<p class="muted">{_e(state.get("reason"))}</p>' if state.get("reason") else ""
+        modifiers = "".join(f"<li>{_e(m)}</li>" for m in state.get("modifiers", []))
+        modifiers_html = f'<ul class="muted">{modifiers}</ul>' if modifiers else ""
+        status_html = f"<p><strong>Status:</strong> {_badge(evaluation)}</p>{reason}{modifiers_html}"
+        if evaluation["status"] == lc.INVALID:
+            problems = "".join(f"<li>{_e(error)}</li>" for error in state.get("errors", []))
+            sections.append(
+                f'<section id="{_attr(evaluation["id"])}">{status_html}<h2>Hypothesis</h2><p class="lead">{_e(evaluation["question"])}</p>'
+                f'<p>{_e(evaluation["description"])}</p><h2 id="{_attr(evaluation["id"])}-problems">Problems to fix</h2>'
+                f'<p class="notice">This eval could not be loaded. The rest of the case is shown normally.</p><ul>{problems}</ul>'
+                f'<h2 id="{_attr(evaluation["id"])}-arms">Arms</h2>{_arms_html(evaluation)}</section>'
+            )
+            continue
         rows = evaluation["rows"]
         metrics = [evaluation.get("primary_metric"), *evaluation.get("method", {}).get("metrics", {}).get("secondary", [])]
         headings = "".join(f"<th>{_e(metric)}</th>" for metric in metrics if metric)
@@ -656,8 +961,10 @@ def _experiment_html(data: dict[str, Any], experiment: dict[str, Any]) -> str:
         for row in rows:
             cells = "".join(f"<td>{_number(row.get('metrics', {}).get(metric, row.get('primary_mean') if metric == evaluation.get('primary_metric') else None))}</td>" for metric in metrics if metric)
             table_rows += f"<tr><td>{_e(row.get('model'))}</td><td>{_e(row.get('arm'))}</td><td>{_e(row.get('repetitions'))}</td><td>{_e(row.get('completed_items'))}/{_e(row.get('items'))}</td>{cells}<td>{_e(row.get('input_tokens'))}</td><td>{_e(row.get('output_tokens'))}</td><td>{_money(row.get('total_cost_usd'))}</td></tr>"
+        no_results = evaluation["status"] in lc.NO_RESULT_STATES
         if not table_rows:
-            table_rows = f"<tr><td colspan=\"{7 + len([m for m in metrics if m])}\">No compatible completed evidence.</td></tr>"
+            message = "Nothing has run yet; see Design above." if no_results else "No compatible completed evidence."
+            table_rows = f"<tr><td colspan=\"{7 + len([m for m in metrics if m])}\">{_e(message)}</td></tr>"
         arms = _arms_html(evaluation)
         evidence_runs = _run_evidence_html(evaluation.get("evidence_runs", []))
         analysis = evaluation.get("analysis")
@@ -667,13 +974,25 @@ def _experiment_html(data: dict[str, Any], experiment: dict[str, Any]) -> str:
             if analysis
             else ""
         )
+        facts = evaluation.get("facts") or []
+        facts_html = (
+            f"<h2 id=\"{_attr(evaluation['id'])}-facts\">Evidence at a glance</h2>"
+            "<p class=\"muted\">Computed from the stored evidence each time this page is built. "
+            "It is not saved in any file, so it cannot be out of date.</p>" + _facts_html(facts)
+            if facts
+            else ""
+        )
         outcome = evaluation.get("observed_outcome", {})
         reproduce = evaluation.get("reproduce")
-        reproduce_html = ""
         if reproduce:
             commands = "\n".join(reproduce["commands"])
             env = ", ".join(reproduce["environment"]) or "none"
-            reproduce_html = f"<h2>Reproduce</h2><pre>{_e(commands)}</pre><p>Required environment variable names: <code>{_e(env)}</code>. Estimated cost: {_money(reproduce['estimated_cost_usd'])}; maximum additional exposure: {_money(reproduce['maximum_cost_usd'])}.</p>"
+            cost_text = (
+                f"Estimated cost of the remaining runs: {_money(reproduce['estimated_cost_usd'])}; maximum additional exposure: {_money(reproduce['maximum_cost_usd'])}."
+                if (evaluation.get("coverage") or {}).get("owed")
+                else "No runs are owed, so there is no additional cost to reproduce what is banked."
+            )
+            reproduce_html = f"<h2>Reproduce</h2><pre>{_e(commands)}</pre><p>Required environment variable names: <code>{_e(env)}</code>. {_e(cost_text)}</p>"
         else:
             reproduce_html = "<h2>Reproduce</h2><p class=\"notice\">Unavailable for a report-only package.</p>"
         coverage = evaluation.get("coverage", {})
@@ -683,11 +1002,11 @@ def _experiment_html(data: dict[str, Any], experiment: dict[str, Any]) -> str:
             f"<p>{_e(dataset_description)}</p>" if dataset_description else ""
         )
         sections.append(f"""
-<section id=\"{_attr(evaluation['id'])}\"><p><strong>Status:</strong> <span class=\"status {_attr(evaluation['status'])}\">{_e(str(evaluation['status']).replace('-', ' ').title())}</span></p><h2>Hypothesis</h2><p class=\"lead\">{_e(evaluation['question'])}</p><p>{_e(evaluation['description'])}</p>
-<h2 id=\"{_attr(evaluation['id'])}-method\">Method</h2><p>Dataset: <code>{_e(evaluation['dataset'].get('name'))}</code> ({_e(evaluation['dataset'].get('items'))} items). Primary metric: <code>{_e(evaluation.get('primary_metric'))}</code>.</p>{dataset_description_html}<h2 id=\"{_attr(evaluation['id'])}-arms\">Arms</h2>{arms}
+<section id=\"{_attr(evaluation['id'])}\">{status_html}<h2>Hypothesis</h2><p class=\"lead\">{_e(evaluation['question'])}</p><p>{_e(evaluation['description'])}</p>
+<h2 id=\"{_attr(evaluation['id'])}-method\">Method</h2><p>Dataset: <code>{_e(evaluation['dataset'].get('name'))}</code> ({_e(evaluation['dataset'].get('items'))} items). Primary metric: <code>{_e(evaluation.get('primary_metric'))}</code>.</p>{dataset_description_html}{_design_html(evaluation)}<h2 id=\"{_attr(evaluation['id'])}-arms\">Arms</h2>{arms}
 <h2 id=\"{_attr(evaluation['id'])}-outcome\">Observed outcome</h2><p class=\"lead\">{_e(outcome.get('summary'))}</p><p>{_e(outcome.get('caveat'))}</p>
 <h2 id=\"{_attr(evaluation['id'])}-results\">Results</h2><div class=\"table-wrap\"><table><thead><tr><th>Model</th><th>Arm</th><th>Repetitions</th><th>Coverage</th>{headings}<th>Input tokens</th><th>Output tokens</th><th>Cost</th></tr></thead><tbody>{table_rows}</tbody></table></div>
-{analysis_html}<h2 id=\"{_attr(evaluation['id'])}-evidence\">Run evidence</h2>{evidence_runs or '<p>No run outputs are included.</p>'}
+{facts_html}{analysis_html}<h2 id=\"{_attr(evaluation['id'])}-evidence\">Run evidence</h2>{evidence_runs or '<p>No run outputs are included.</p>'}
 <h2 id=\"{_attr(evaluation['id'])}-limitations\">Limitations and coverage</h2><ul>{''.join(f'<li>{_e(value)}</li>' for value in limitations)}</ul>{reproduce_html}</section>""")
     body = f"<header id=\"experiment-overview\"><p><a href=\"../index.html\">← {_e(data['case']['title'])}</a></p><p class=\"document-type\">Experiment</p><h1>{_e(experiment['title'])}</h1></header>{''.join(sections)}"
     return _document(
@@ -751,13 +1070,29 @@ def _navigation(data: dict[str, Any], current_experiment: str | None = None) -> 
                 if evaluation.get("analysis")
                 else ""
             )
+            if evaluation.get("status") == lc.INVALID:
+                evaluation_items.append(
+                    f"<li><a href=\"{eval_base}\">{_e(eval_id.replace('-', ' ').title())}</a> "
+                    f"<span class=\"muted\">(invalid)</span></li>"
+                )
+                continue
+            design_link = (
+                f"<li><a href=\"{_attr(experiment_page)}#{_attr(eval_id)}-design\">Design</a></li>"
+                if evaluation.get("design")
+                else ""
+            )
+            facts_link = (
+                f"<li><a href=\"{_attr(experiment_page)}#{_attr(eval_id)}-facts\">Evidence at a glance</a></li>"
+                if evaluation.get("facts")
+                else ""
+            )
             evaluation_items.append(
                 f"<li><a href=\"{eval_base}\">{_e(eval_id.replace('-', ' ').title())}</a>"
                 f"<ul><li><a href=\"{_attr(experiment_page)}#{_attr(eval_id)}-method\">Method</a></li>"
-                f"{arm_branch}"
+                f"{design_link}{arm_branch}"
                 f"<li><a href=\"{_attr(experiment_page)}#{_attr(eval_id)}-outcome\">Observed outcome</a></li>"
                 f"<li><a href=\"{_attr(experiment_page)}#{_attr(eval_id)}-results\">Results</a></li>"
-                f"{conclusion_link}"
+                f"{facts_link}{conclusion_link}"
                 f"<li><a href=\"{_attr(experiment_page)}#{_attr(eval_id)}-evidence\">Run evidence</a></li>"
                 f"<li><a href=\"{_attr(experiment_page)}#{_attr(eval_id)}-limitations\">Limitations</a></li>"
                 f"</ul></li>"
@@ -864,25 +1199,15 @@ def _run_evidence_html(runs: Any) -> str:
     if not isinstance(runs, list) or not runs:
         return ""
     rows: list[str] = []
+    column_label = "Exact match"
     for run in runs:
         if not isinstance(run, dict):
             continue
         items = run.get("items") if isinstance(run.get("items"), list) else []
-        is_image_run = any(isinstance(item, dict) and item.get("kind") == "image" for item in items)
-        if is_image_run:
-            exact_matches = sum(
-                isinstance(item, dict)
-                and isinstance(item.get("acceptance"), dict)
-                and item["acceptance"].get("state") == "accepted"
-                for item in items
-            )
-        else:
-            exact_matches = sum(
-                isinstance(item, dict)
-                and isinstance(item.get("scores"), dict)
-                and item["scores"].get("exact_match") is True
-                for item in items
-            )
+        views = [item.get("view") or {} for item in items if isinstance(item, dict)]
+        if views:
+            column_label = views[0].get("column_label") or column_label
+        successes = sum(1 for view in views if view.get("success") is True)
         completed = int(run.get("completed_items") or 0)
         selected = int(run.get("selected_items") or 0)
         repetition = run.get("repetition")
@@ -900,6 +1225,20 @@ def _run_evidence_html(runs: Any) -> str:
             f"<span><strong>Failed items:</strong> {_e(run.get('failed_items'))}</span>"
             "</p>"
         )
+        execution = run.get("execution")
+        if isinstance(execution, dict):
+            logs = "; ".join(
+                f"attempt {entry.get('attempt')}: {entry.get('status')}, {entry.get('samples')} sample(s), {str(entry.get('sha256'))[:19]}…"
+                for entry in execution.get("logs", [])
+            )
+            meta += (
+                '<p class="run-meta">'
+                f"<span><strong>Backend:</strong> {_e(execution.get('backend'))}</span>"
+                f"<span><strong>Model route:</strong> <code>{_e(execution.get('model_uri'))}</code> at {_e(execution.get('base_url_origin'))}</span>"
+                f"<span><strong>Inspect:</strong> {_e(execution.get('inspect_version'))} (adapter {_e(execution.get('adapter_version'))})</span>"
+                f"<span><strong>Logs (digest-pinned, not published):</strong> {_e(logs or 'none')}</span>"
+                "</p>"
+            )
         item_table = _item_evidence_html(items)
         rows.append(
             '<details class="run-evidence"><summary>'
@@ -907,22 +1246,17 @@ def _run_evidence_html(runs: Any) -> str:
             f"<span><code>{_e(run.get('arm'))}</code></span>"
             f"<span>{_e(repetition)}</span>"
             f"<span>{_e(completed)}/{_e(selected)}</span>"
-            f"<span>{_e(exact_matches)}/{_e(selected)}</span>"
+            f"<span>{_e(successes)}/{_e(selected)}</span>"
             f"<span>{_money(run.get('cost_usd'))}</span>"
             f"</summary><div class=\"run-details\">{meta}{item_table}</div></details>"
         )
     if not rows:
         return ""
-    image_runs = any(
-        isinstance(item, dict) and item.get("kind") == "image"
-        for run in runs
-        if isinstance(run, dict)
-        for item in (run.get("items") or [])
-    )
+    success_label = {"Acceptance": "Accepted", "Score": "Full score"}.get(column_label, column_label.title() + "es" if column_label == "Exact match" else column_label)
     return (
         '<div class="run-table">'
         '<div class="run-header"><span>Model</span><span>Arm</span><span>Repetition</span>'
-        f'<span>Coverage</span><span>{"Accepted" if image_runs else "Exact matches"}</span><span>Cost</span></div>'
+        f'<span>Coverage</span><span>{_e(success_label)}</span><span>Cost</span></div>'
         + "".join(rows)
         + "</div>"
     )
@@ -932,73 +1266,28 @@ def _item_evidence_html(items: Any) -> str:
     if not isinstance(items, list) or not items:
         return ""
     rows: list[str] = []
+    label = "Exact match"
     for item in items:
         if not isinstance(item, dict):
             continue
-        scores = item.get("scores")
-        if not isinstance(scores, dict):
-            scores = {}
-        exact_match = scores.get("exact_match")
-        exact_match_label = (
-            "Yes" if exact_match is True else "No" if exact_match is False else "—"
-        )
+        view = item.get("view") or {}
+        label = view.get("column_label") or label
         state = str(item.get("state") or "unknown").replace("-", " ").title()
-        if item.get("kind") == "image":
-            acceptance = item.get("acceptance") if isinstance(item.get("acceptance"), dict) else {}
-            exact_match_label = str(acceptance.get("state") or "—").title()
-            image_html = (
-                f'<img class="item-image" src="../{_attr(item["image"])}" alt="{_attr(item.get("item_id"))}">'
-                if item.get("image")
-                else f"<p>No image ({_e((item.get('outcome') or {}).get('reason'))}).</p>"
-            )
-            evidence = {
-                "outcome": item.get("outcome"),
-                "mechanical": scores,
-                "model_judge": item.get("model_judge"),
-                "human": item.get("human"),
-                "acceptance": acceptance,
-            }
-            if item.get("revised_prompt"):
-                evidence["revised_prompt"] = item["revised_prompt"]
-            details = (
-                '<div class="evidence-details">'
-                '<div class="evidence-details-grid">'
-                f"<div><h3>Image</h3>{image_html}</div>"
-                f"<div><h3>Input</h3><pre>{_e(json.dumps(item.get('input'), sort_keys=True, ensure_ascii=False, indent=2))}</pre></div>"
-                f"<div><h3>Evidence (separate columns, never blended)</h3><pre>{_e(json.dumps(evidence, sort_keys=True, ensure_ascii=False, indent=2))}</pre></div>"
-                "</div></div>"
-            )
-            rows.append(
-                '<details class="evidence-row"><summary>'
-                f"<span><code>{_e(item.get('item_id'))}</code></span>"
-                f"<span>{_e(state)}</span>"
-                f"<span>{_e(exact_match_label)}</span>"
-                f"</summary>{details}</details>"
-            )
-            continue
-        details = (
-            '<div class="evidence-details">'
-            '<div class="evidence-details-grid">'
-            f"<div><h3>Input</h3><pre>{_e(json.dumps(item.get('input'), sort_keys=True, ensure_ascii=False, indent=2))}</pre></div>"
-            f"<div><h3>Expected</h3><pre>{_e(json.dumps(item.get('expected'), sort_keys=True, ensure_ascii=False, indent=2))}</pre></div>"
-            f"<div><h3>Output</h3><pre>{_e(item.get('output') or 'No stored output')}</pre></div>"
-            "</div>"
-            f"<h3>Scores</h3><pre>{_e(json.dumps(scores, sort_keys=True, ensure_ascii=False, indent=2))}</pre>"
-            "</div>"
-        )
+        headline = view.get("headline")
+        headline_html = f'<br><span class="headline">{_e(headline)}</span>' if headline else ""
         rows.append(
             '<details class="evidence-row"><summary>'
-            f"<span><code>{_e(item.get('item_id'))}</code></span>"
+            f"<span><code>{_e(item.get('item_id'))}</code>{headline_html}</span>"
             f"<span>{_e(state)}</span>"
-            f"<span>{_e(exact_match_label)}</span>"
-            f"</summary>{details}</details>"
+            f"<span>{_e(view.get('column_value', '—'))}</span>"
+            f"</summary>{blocks.render_item_view(view)}</details>"
         )
     if not rows:
         return ""
     return (
         '<div class="evidence-table">'
         '<div class="evidence-header"><span>Item</span><span>Status</span>'
-        f'<span>{"Acceptance" if any(isinstance(i, dict) and i.get("kind") == "image" for i in items) else "Exact match"}</span></div>'
+        f'<span>{_e(label)}</span></div>'
         + "".join(rows)
         + "</div>"
     )
@@ -1159,11 +1448,15 @@ def _observed_outcome(rows: list[dict[str, Any]], primary: Any) -> dict[str, str
             "summary": "No compatible completed evidence is available to answer the hypothesis.",
             "caveat": caveat,
         }
+    if single_sample(measured):
+        caveat = SINGLE_SAMPLE_CAVEAT + " " + caveat
     reverse = metric not in LOWER_IS_BETTER_METRICS
     ordered = sorted(
         measured, key=lambda row: float(row["primary_mean"]), reverse=reverse
     )
     first = ordered[0]
+    if len(ordered) >= 3 and float(first["primary_mean"]) != float(ordered[-1]["primary_mean"]):
+        return {"summary": metric_range_sentence(measured, metric).replace("`", ""), "caveat": caveat}
     if len(ordered) == 1:
         return {
             "summary": (
