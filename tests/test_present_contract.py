@@ -476,7 +476,7 @@ class CliTests(unittest.TestCase):
         document = yaml.safe_load((fixture.eval_dir / "eval.yml").read_text())
         del document["metrics"]
         write_yaml(fixture.eval_dir / "eval.yml", document)
-        args = Namespace(case="bundle-case", output=fixture.root / "out", open=False, watch=False, strict=True)
+        args = Namespace(case="bundle-case", output=fixture.root / "out", open=False, watch=False, serve=False, port=0, strict=True)
         with self.assertRaises(TamesuError):
             cli.command_present(fixture.root, args)
         args.strict = False
@@ -484,6 +484,24 @@ class CliTests(unittest.TestCase):
         with patch("webbrowser.open") as opened:
             self.assertEqual(cli.command_present(fixture.root, args), 0)
         self.assertTrue(opened.call_args[0][0].endswith("/out/index.html"))
+
+    def test_serve_returns_the_rendered_page(self) -> None:
+        import urllib.request
+
+        from tamesu.present_watch import serve
+
+        fixture = BundleCase(self)
+        destination = present_case(fixture.case, fixture.root / "out")
+        server = serve(destination, 0)
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/index.html"
+            with urllib.request.urlopen(url) as response:
+                self.assertEqual(response.read(), (destination / "index.html").read_bytes())
+            with self.assertRaises(TamesuError):
+                serve(destination, server.server_address[1])
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":

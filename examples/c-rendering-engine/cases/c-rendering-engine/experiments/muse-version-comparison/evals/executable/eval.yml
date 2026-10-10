@@ -1,6 +1,4 @@
-schema_version: 1
 name: executable
-status: active
 question: >
   Which Muse Spark version produces a C renderer that builds, runs, and produces a
   decodable image from one identical request?
@@ -16,9 +14,6 @@ execution:
   backend: inspect
   file: ../../inspect/task.py
   task: rendering_engine
-  sources:
-    - ../../inspect/task.py
-    - ../../inspect/compose.yaml
   limits:
     cost_limit: 0.25
     time_limit: 600

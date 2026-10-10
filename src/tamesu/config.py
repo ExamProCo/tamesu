@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -84,7 +85,7 @@ def _validate_id(value: str, location: str, errors: list[str]) -> None:
 
 
 def _validate_schema_version(mapping: dict[str, Any], location: str, errors: list[str]) -> None:
-    if mapping.get("schema_version") != 1:
+    if mapping.get("schema_version", 1) != 1:  # optional; 1 is the only version
         errors.append(f"{location}.schema_version must be 1")
 
 
@@ -453,6 +454,27 @@ def _validate_model_parameters(
             errors.append(f"{location}: {error}")
 
 
+def apply_eval_defaults(evaluation: Any, eval_dir: Path, project_root: Path) -> Any:
+    """Fill the fields an author may leave out. Runs before validation and identity, so an
+    omitted field and its written-out default produce the same run identity."""
+    if not isinstance(evaluation, dict):
+        return evaluation
+    evaluation.setdefault("status", "active")
+    block = evaluation.get("execution")
+    if isinstance(block, dict) and block.get("backend") == "inspect" and "sources" not in block:
+        from .backends.inspect_backend import _source_like_files
+
+        raw_file = block.get("file")
+        if isinstance(raw_file, str) and raw_file.endswith(".py"):
+            try:
+                task_file = resolve_contained(eval_dir, raw_file, project_root)
+            except ConfigError:
+                return evaluation  # validation reports the bad path
+            found = [task_file, *(f for f in _source_like_files(task_file.parent) if f != task_file)]
+            block["sources"] = [os.path.relpath(f, eval_dir.resolve()) for f in found]
+    return evaluation
+
+
 def load_eval_context(project_root: Path, eval_id: str) -> EvalContext:
     project_root = project_root.resolve()
     path = eval_path(project_root, eval_id)
@@ -470,7 +492,7 @@ def load_eval_context(project_root: Path, eval_id: str) -> EvalContext:
         )
 
     case = load_yaml(case_path)
-    evaluation = load_yaml(path)
+    evaluation = apply_eval_defaults(load_yaml(path), eval_dir, project_root)
     raw_dataset_path = evaluation.get("dataset")
     if not isinstance(raw_dataset_path, str) or not raw_dataset_path:
         raise ConfigError("eval.dataset must be a non-empty path")

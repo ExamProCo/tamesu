@@ -59,6 +59,20 @@ python -m pip install -e .
 tamesu --help
 ```
 
+## Quick start
+
+Inside a project (any directory with a `cases/` folder):
+
+```sh
+tamesu new eval my-case/first-try/baseline   # writes a case, experiment, and eval to edit
+tamesu show                                  # open http://localhost:8000 and leave it open
+tamesu run baseline                          # run it; refresh the page to see the result
+```
+
+`new` writes commented files at each level of the tree. Edit the question, prompt, dataset, and
+models, then refresh the page: it shows what will run and what it can cost before you spend
+anything.
+
 Tamesu organizes evaluation work into four levels:
 
 ```text
@@ -72,11 +86,17 @@ Case → Experiment → Eval → Run
 
 ## Documentation
 
+Start here:
+
+- [Tutorial, Part 1: run your first eval](docs/tutorial.md)
+- [C rendering engine walkthrough](examples/c-rendering-engine/WALKTHROUGH.md)
+
+Reference:
+
 - [The White Rabbit Problem](docs/white-rabbit-problem.md)
 - [The Tamesu approach: from question to evidence](docs/approach.md)
 - [Core concepts](docs/concepts.md)
 - [Where Tamesu fits in the evaluation landscape](docs/landscape.md)
-- [Tutorial, Part 1: run your first eval](docs/tutorial.md)
 - [Tutorial, Part 2: present, package, and ship a case](docs/tutorial-presentation-packaging-shipping.md)
 - [Repository and file structure](docs/file-structure.md)
 - [Manifest reference](docs/manifests.md)
@@ -92,6 +112,7 @@ Case → Experiment → Eval → Run
 - [Logging and execution evidence](docs/logging.md)
 - [Contributor development guide](docs/development.md)
 
-## Example
+## Examples
 
 - [Support-ticket classification](examples/support-ticket-classification/README.md)
+- [C rendering engine](examples/c-rendering-engine/README.md) (executable eval in Docker, human review)

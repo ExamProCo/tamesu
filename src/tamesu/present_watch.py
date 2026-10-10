@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
+
+from .errors import TamesuError
 
 SKIP_DIRS = {"build", ".git", "__pycache__", "node_modules", ".tamesu", "staging"}
 
@@ -60,3 +65,18 @@ def watch(
         previous = snapshot(case_dir)
         once()
     return renders
+
+
+class _QuietHandler(SimpleHTTPRequestHandler):
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - stdlib signature
+        pass
+
+
+def serve(directory: Path, port: int) -> ThreadingHTTPServer:
+    """Serve the rendered page on localhost from a background thread. Port 0 picks a free one."""
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), partial(_QuietHandler, directory=str(directory)))
+    except OSError as exc:
+        raise TamesuError(f"Cannot serve on port {port} ({exc.strerror}); pass --port with another number.") from exc
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server

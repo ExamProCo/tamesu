@@ -53,6 +53,23 @@ def eval_id_from_path(project_root: Path, path: Path) -> str:
     return f"{parts[1]}/{parts[3]}/{parts[5]}"
 
 
+def resolve_eval_ref(project_root: Path, ref: str) -> str:
+    """Expand a short eval reference (`<eval>` or `<experiment>/<eval>`) to its full ID if unique."""
+    parts = ref.strip("/").split("/")
+    if len(parts) == 3 or not 1 <= len(parts) <= 2 or any(not part for part in parts):
+        return ref
+    matches = [
+        eval_id
+        for eval_id in (eval_id_from_path(project_root, path) for path in discover_eval_paths(project_root))
+        if eval_id.split("/")[-len(parts):] == parts
+    ]
+    if not matches:
+        raise ConfigError(f"Eval not found: {ref}")
+    if len(matches) > 1:
+        raise ConfigError(f"Eval reference {ref!r} is ambiguous; use one of: " + ", ".join(matches))
+    return matches[0]
+
+
 def find_run_dir(project_root: Path, run_id: str) -> Path:
     matches = list(project_root.glob(f"cases/*/experiments/*/evals/*/runs/{run_id}"))
     if not matches:

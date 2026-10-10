@@ -1,6 +1,4 @@
-schema_version: 1
 name: single-shot
-status: active
 question: >
   What implementation does each Muse Spark version produce from one identical request,
   and which response should advance to a controlled executable evaluation?

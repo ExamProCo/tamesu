@@ -15,6 +15,7 @@ from .discovery import (
     eval_id_from_path,
     find_project_root,
     find_run_dir,
+    resolve_eval_ref,
 )
 from .backends import backend_for
 from .errors import ExecutionError, TamesuError
@@ -53,7 +54,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Load the highest-precedence .env from this directory.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True, metavar="<command>")
+
+    new_parser = subparsers.add_parser("new", help="Create a case, experiment, or eval from a template.")
+    new_parser.add_argument("level", choices=["case", "experiment", "eval"])
+    new_parser.add_argument("path", help="case | case/experiment | case/experiment/eval")
+
+    show_parser = subparsers.add_parser(
+        "show", help="Serve the case page on localhost; re-renders on change (Ctrl-C to stop)."
+    )
+    show_parser.add_argument("case", nargs="?", help="Case name; optional when the project has one case.")
+    show_parser.add_argument("--port", type=int, default=8000, help="Port (default 8000).")
+    show_parser.add_argument("--open", action="store_true", help="Also open it in a browser.")
 
     lint_parser = subparsers.add_parser("lint", help="Validate evaluation files.")
     lint_parser.add_argument("path", nargs="?", default=".")
@@ -169,6 +181,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--watch", action="store_true", help="Re-render whenever a file in the case changes (Ctrl-C to stop)."
     )
     present_parser.add_argument(
+        "--serve", action="store_true", help="Serve the page on localhost and re-render on change (Ctrl-C to stop)."
+    )
+    present_parser.add_argument("--port", type=int, default=8000, help="Port for --serve (default 8000).")
+    present_parser.add_argument(
         "--strict", action="store_true", help="Exit nonzero if any eval is invalid (the page is still written)."
     )
 
@@ -227,7 +243,28 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="STATUS:PATH",
         help="Validate PR ownership/version rules for a changed registry file.",
     )
+    _group_commands(parser, subparsers)
     return parser
+
+
+MAIN_COMMANDS = ("new", "run", "show", "status", "list")
+
+
+def _group_commands(parser: argparse.ArgumentParser, subparsers: Any) -> None:
+    """List the main path first in --help and everything else after it."""
+    helps = {action.dest: action.help or "" for action in subparsers._choices_actions}
+    width = max(len(name) for name in helps) + 2
+
+    def lines(names: Sequence[str]) -> str:
+        return "\n".join(f"  {name.ljust(width)}{helps[name]}" for name in names)
+
+    advanced = [name for name in helps if name not in MAIN_COMMANDS]
+    parser.formatter_class = argparse.RawDescriptionHelpFormatter
+    parser.epilog = (
+        f"start here:\n{lines(MAIN_COMMANDS)}\n\nother commands:\n{lines(advanced)}\n\n"
+        "Run `tamesu <command> --help` for a command's options."
+    )
+    subparsers._choices_actions = []
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -286,10 +323,25 @@ def dispatch(args: argparse.Namespace) -> int:
         destination = build_site(args.registry, args.output)
         print(f"Built showcase: {destination}")
         return 0
+    if args.command == "new":
+        from .scaffold import create
+
+        try:
+            root = find_project_root()
+        except TamesuError:
+            root = Path.cwd()  # `new` may start a project
+        for path in create(root, args.level, args.path):
+            print(f"Created {path.relative_to(root)}")
+        return 0
     project_root = find_project_root()
     load_environment(project_root, config_dir=args.config_dir)
+    if getattr(args, "eval_id", None):
+        args.eval_id = resolve_eval_ref(project_root, args.eval_id)
     if args.command == "list":
         return command_list(project_root)
+    if args.command == "show":
+        args.output, args.watch, args.serve, args.strict = None, False, True, False
+        return command_present(project_root, args)
     if args.command == "plan":
         return command_plan(project_root, args.eval_id)
     if args.command == "activate":
@@ -410,7 +462,7 @@ def command_list(project_root: Path) -> int:
     for path in paths:
         eval_id = eval_id_from_path(project_root, path)
         manifest = load_yaml(path)
-        print(f"{eval_id}\t{manifest.get('status', 'unknown')}")
+        print(f"{eval_id}\t{manifest.get('status', 'active')}")
     return 0
 
 
@@ -727,11 +779,29 @@ def command_review(project_root: Path, args: argparse.Namespace) -> int:
 
 
 def command_present(project_root: Path, args: argparse.Namespace) -> int:
-    case_dir = resolve_case(project_root, args.case)
+    case_dir = resolve_case(project_root, args.case) if args.case else _only_case(project_root)
 
     def render() -> Path:
         return present_case(case_dir, args.output, strict=args.strict and not args.watch)
 
+    if args.serve:
+        import webbrowser
+
+        from .present_watch import serve, watch
+
+        server = serve(render(), args.port)
+        url = f"http://localhost:{server.server_address[1]}/"
+        print(f"Serving {case_dir.name} at {url} (re-renders on change; Ctrl-C to stop)")
+        if args.open:
+            webbrowser.open(url)
+        try:
+            watch(case_dir, render)
+        except KeyboardInterrupt:
+            print("stopped")
+        finally:
+            server.shutdown()
+            server.server_close()
+        return 0
     if args.watch:
         from .present_watch import watch
 
@@ -749,6 +819,15 @@ def command_present(project_root: Path, args: argparse.Namespace) -> int:
     if args.open:
         _open_in_browser(destination)
     return 0
+
+
+def _only_case(project_root: Path) -> Path:
+    cases = sorted(path.parent for path in project_root.glob("cases/*/case.yml"))
+    if len(cases) == 1:
+        return cases[0]
+    if not cases:
+        raise TamesuError("No cases in this project. Create one with `tamesu new case <name>`.")
+    raise TamesuError("This project has several cases; name one: " + ", ".join(c.name for c in cases))
 
 
 def _open_in_browser(destination: Path) -> None:
@@ -909,6 +988,8 @@ def command_close(
     updated, replacements = re.subn(
         r"(?m)^status:\s*(draft|active|complete)\s*$", "status: complete", source, count=1
     )
+    if replacements == 0:  # status was left to its default
+        updated, replacements = re.subn(r"(?m)^(name:.*)$", r"\1\nstatus: complete", source, count=1)
     if replacements != 1:
         raise TamesuError(f"Could not update status in {eval_path}")
     write_text(eval_path, updated)

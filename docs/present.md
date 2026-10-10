@@ -8,6 +8,7 @@ and closed. Check it as often as you like; a re-render takes a fraction of a sec
 tamesu present support-ticket-triage            # writes build/present/<case>/
 tamesu present support-ticket-triage --open     # ...and opens it
 tamesu present support-ticket-triage --watch    # re-renders when a case file changes
+tamesu present support-ticket-triage --serve    # serves it at http://localhost:8000 and re-renders on change
 tamesu present support-ticket-triage --strict   # still writes the page; exits nonzero if any eval is invalid
 ```
 

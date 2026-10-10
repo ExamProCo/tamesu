@@ -25,7 +25,7 @@ metrics therefore cover response generation, JSON/schema validity, latency, and 
 implementation quality.
 
 After running, extract each `response` into an isolated directory and assess it with the
-[manual review rubric](experiments/muse-version-comparison/rubrics/rendering-engine-quality.md).
+[manual review rubric](cases/c-rendering-engine/experiments/muse-version-comparison/rubrics/rendering-engine-quality.md).
 Do not interpret schema validity as evidence that the renderer builds or satisfies the
 prompt.
 
@@ -35,26 +35,26 @@ Run these read-only checks from the repository root:
 
 ```sh
 tamesu lint cases/c-rendering-engine
-tamesu plan c-rendering-engine/muse-version-comparison/single-shot
+tamesu plan single-shot
 ```
 
 After reviewing the plan, activate it. Activation does not call the provider:
 
 ```sh
-tamesu activate c-rendering-engine/muse-version-comparison/single-shot
+tamesu activate single-shot
 ```
 
 The paid run makes three calls: one to each Muse Spark version.
 
 ```sh
-tamesu run c-rendering-engine/muse-version-comparison/single-shot
+tamesu run single-shot
 ```
 
 Do not use `--limit-items 1` as a probe here: there is already only one item per run, so
 that would duplicate the full paid call pattern without banking formal evidence.
 
-> **Evaluating the tool?** Follow the step-by-step [WALKTHROUGH.md](WALKTHROUGH.md): every command,
-> what to expect, and which code to open at each step.
+> **Run the executable example:** start with [WALKTHROUGH.md](WALKTHROUGH.md). Deeper guides live in
+> [docs/reference/c-rendering-engine](../../docs/reference/c-rendering-engine/).
 
 ## Executable evaluation (Inspect AI backend)
 
@@ -73,13 +73,13 @@ and the reviewer both pass it.
 ```sh
 pip install 'tamesu[inspect]'     # needs Docker running
 tamesu lint cases/c-rendering-engine
-tamesu plan c-rendering-engine/muse-version-comparison/executable
-tamesu activate c-rendering-engine/muse-version-comparison/executable
-tamesu run c-rendering-engine/muse-version-comparison/executable
-tamesu review export c-rendering-engine/muse-version-comparison/executable --out review/pack
+tamesu plan executable
+tamesu activate executable
+tamesu run executable
+tamesu review export executable --out review/pack
 # review in review/pack/review.html, then:
-tamesu review import c-rendering-engine/muse-version-comparison/executable review/pack/responses.yml
-tamesu report c-rendering-engine/muse-version-comparison/executable
+tamesu review import executable review/pack/responses.yml
+tamesu report executable
 ```
 
 Run these from this directory (it holds `cases/`). See
