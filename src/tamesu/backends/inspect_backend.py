@@ -136,6 +136,10 @@ def validate_execution(
     evaluation: dict[str, Any], eval_dir: Path, project_root: Path, errors: list[str]
 ) -> None:
     block = evaluation.get("execution")
+    if isinstance(block, dict) and evaluation.get("task") in {"structured_text", "image_generation"} and not block.get("file"):
+        from ..inspect_tasks import validate_builtin_execution
+        validate_builtin_execution(evaluation, errors)
+        return
     if not isinstance(block, dict):
         errors.append("eval.execution must be a mapping when backend is inspect")
         return
@@ -212,8 +216,9 @@ def validate_execution(
             ):
                 errors.append(f"eval.execution.artifacts.{key} must be a list of role names")
         review = artifacts.get("review")
-        if review is not None and (not isinstance(review, str) or not ROLE.fullmatch(review)):
-            errors.append("eval.execution.artifacts.review must be a role name")
+        reviews = [review] if isinstance(review, str) else review
+        if review is not None and (not isinstance(reviews, list) or not reviews or any(not isinstance(r, str) or not ROLE.fullmatch(r) for r in reviews) or len(set(reviews)) != len(reviews)):
+            errors.append("eval.execution.artifacts.review must be a role name or a nonempty list of unique roles")
         max_bytes = artifacts.get("max_bytes")
         if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1):
             errors.append("eval.execution.artifacts.max_bytes must be a positive integer")
@@ -247,9 +252,9 @@ def _source_like_files(directory: Path) -> list[Path]:
     found: list[Path] = []
     for path in sorted(directory.rglob("*")):
         relative = path.relative_to(directory)
-        if any(part.startswith(".") or part in {"staging", "__pycache__"} for part in relative.parts):
+        if any(part.startswith(".") or part in {"staging", "__pycache__", "runs", "logs", "review", "rubrics", "build"} for part in relative.parts):
             continue
-        if not path.is_file():
+        if not path.is_file() or path.name in {"eval.yml", "dataset.yml", "case.yml", "rubric.yml"}:
             continue
         if path.suffix in SOURCE_SUFFIXES or path.name.startswith(SOURCE_PREFIXES):
             found.append(path.resolve())
@@ -263,11 +268,13 @@ def frozen_samples(
     context: EvalContext, prompts: dict[str, Path], items: list[tuple[str, dict[str, Any]]]
 ) -> list[dict[str, Any]]:
     """The exact Inspect dataset: one sample per Tamesu item, ID preserved, prompts rendered."""
-    from ..tasks.structured_text import render_prompts
+    task = task_for(context.evaluation, context.case)
 
     samples = []
     for item_id, item in items:
-        system_prompt, user_prompt = render_prompts(prompts, item)
+        rendered = task.render_prompts(prompts, item)
+        system_prompt = rendered.get("system", "")
+        user_prompt = rendered.get("user", rendered.get("prompt", ""))
         expected = item.get("expected")
         samples.append(
             {
@@ -313,9 +320,15 @@ class InspectBackend:
             )
         if installed_inspect_version() is None:
             raise ExecutionError(
-                f"inspect-ai {INSPECT_SPEC} is not installed; run: pip install 'tamesu[inspect]'"
+                f"inspect-ai {INSPECT_SPEC} is not installed; run: pip install tamesu"
             )
         for provider in sorted({spec.provider for spec in specs}):
+            if context.evaluation.get("task") == "image_generation" and not execution_block(context.evaluation).get("file"):
+                from ..providers import get_provider
+                error = get_provider(provider).credential_error()
+                if error:
+                    raise ExecutionError(error)
+                continue
             names = PROVIDER_KEYS[provider]
             if not any(os.environ.get(name) for name in names):
                 raise ExecutionError(f"{provider}: {' or '.join(names)} is not set in the effective environment")
@@ -364,11 +377,16 @@ class InspectBackend:
                 "images": sorted({image for _, image in image_references(sources)}),
             }
         }
+        if not block.get("file"):
+            sources.append(Path(__file__).parents[1] / "inspect_tasks.py")
         return extra, sources
 
     def estimate_item_cost(
         self, task: Any, context: EvalContext, spec: RunSpec, item: dict[str, Any]
     ) -> tuple[float, float] | None:
+        if context.evaluation.get("task") in {"structured_text", "image_generation"}:
+            estimate = task.estimate_item_cost(context, spec, item)
+            return (estimate[0], estimate[1] * (spec.retries + 1)) if estimate else None
         limit = execution_block(context.evaluation).get("limits", {}).get("cost_limit")
         if not isinstance(limit, (int, float)):
             return None
@@ -471,18 +489,26 @@ class InspectBackend:
     ) -> Any:
         try:
             from inspect_ai import eval as inspect_eval
-            from inspect_ai.model import ModelCost
+            from inspect_ai.model import ModelCost, ResponseSchema
         except ImportError as exc:  # pragma: no cover - guarded by check_ready
             raise ExecutionError(f"inspect-ai is not importable: {exc}") from exc
 
         context, spec = run.context, run.spec
         block = execution_block(context.evaluation)
         limits = dict(block.get("limits", {}))
-        task_file = resolve_contained(context.eval_dir, block["file"], context.project_root)
+        builtin = not block.get("file")
+        if builtin:
+            from ..inspect_tasks import builtin_task, image_model
+            task_ref = builtin_task(run, input_path)
+        else:
+            task_file = resolve_contained(context.eval_dir, block["file"], context.project_root)
+            task_ref = f"{task_file}@{block['task']}"
         uri = model_uri(spec.provider, spec.model)
         model_spec = registered(spec.model)
-        assert model_spec is not None
+        # Unknown/private model prices remain unknown for built-in text tasks.
         generation: dict[str, Any] = {"max_retries": spec.retries, "timeout": spec.timeout_seconds}
+        if builtin and context.evaluation.get("task") == "structured_text":
+            generation["response_schema"] = ResponseSchema(name="tamesu_output", json_schema=context.output_schema or {})
         parameters = dict(spec.parameters)
         if "effort" in parameters:
             generation["reasoning_effort"] = parameters.pop("effort")
@@ -490,6 +516,8 @@ class InspectBackend:
             generation["max_tokens"] = parameters.pop("max_tokens", parameters.pop("max_output_tokens", None))
         if "temperature" in parameters:
             generation["temperature"] = parameters.pop("temperature")
+        if context.evaluation.get("task") == "image_generation" and builtin:
+            parameters.clear()  # image options are carried by the Inspect ModelAPI adapter
         for key in parameters:
             raise ExecutionError(f"Parameter {key!r} has no Inspect mapping in adapter version {ADAPTER_VERSION}")
 
@@ -497,8 +525,8 @@ class InspectBackend:
         os.environ["TAMESU_STAGING_DIR"] = str(staging)
         try:
             logs = inspect_eval(
-                f"{task_file}@{block['task']}",
-                model=uri,
+                task_ref,
+                model=image_model(run) if builtin and context.evaluation.get("task") == "image_generation" else uri,
                 model_base_url=ROUTES[spec.provider].base_url(),
                 task_args={**block.get("task_args", {}), "dataset": str(input_path)},
                 sample_id=pending,
@@ -519,14 +547,14 @@ class InspectBackend:
                         input_cache_write=model_spec.input_usd_per_million,
                         input_cache_read=model_spec.input_usd_per_million,
                     )
-                },
+                } if model_spec and model_spec.input_usd_per_million is not None and model_spec.output_usd_per_million is not None else None,
                 **limits,
                 **generation,
             )
         except KeyboardInterrupt:
             raise
         except Exception as exc:
-            raise ExecutionError(f"Inspect could not run {block['task']}: {run.log.safe_text(exc)}") from exc
+            raise ExecutionError(f"Inspect could not run {block.get('task', context.evaluation.get('task'))}: {run.log.safe_text(exc)}") from exc
         finally:
             if previous is None:
                 os.environ.pop("TAMESU_STAGING_DIR", None)
@@ -658,6 +686,9 @@ class InspectBackend:
                 "limit": {"type": limit.type, "limit": limit.limit} if limit is not None else None,
             },
         }
+        if not block.get("file"):
+            from ..inspect_tasks import adapt_builtin_result
+            adapt_builtin_result(run, item_id, item_dir, sample, result)
         adapt = getattr(task_for(run.context.evaluation, run.context.case), "adapt_ingested_result", None)
         if adapt is not None:
             adapt(run.context, run.selected_item(item_id), item_dir, result)

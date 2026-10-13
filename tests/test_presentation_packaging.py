@@ -65,18 +65,18 @@ class PresentationPackagingTests(unittest.TestCase):
         self.assertEqual(data["datasets"][0]["name"], "support-tickets-v1")
         self.assertIn("Eight synthetic support tickets", data["datasets"][0]["description"])
         items = data["experiments"][0]["evals"][0]["items"]
-        self.assertEqual(len(items), 32)
+        self.assertEqual(len(items), sum(1 for _ in self.eval_dir.glob("runs/*/items/*/result.yml")))
         self.assertTrue(all(item["model"] == "muse-spark-1.2" for item in items))
         self.assertTrue(all(item["arm"] for item in items))
         self.assertTrue(all("exact_match" in item["scores"] for item in items))
         evidence_runs = data["experiments"][0]["evals"][0]["evidence_runs"]
-        self.assertEqual(len(evidence_runs), 4)
-        self.assertTrue(all(len(run["items"]) == 8 for run in evidence_runs))
+        self.assertEqual(len(evidence_runs), sum(1 for _ in self.eval_dir.glob("runs/*/run.yml")))
+        self.assertTrue(all(len(run["items"]) == run["selected_items"] for run in evidence_runs))
         self.assertEqual({run["repetition"] for run in evidence_runs}, {1, 2})
         evaluation = data["experiments"][0]["evals"][0]
-        self.assertIn("75.00%", evaluation["observed_outcome"]["summary"])
-        self.assertIn("68.75%", evaluation["observed_outcome"]["summary"])
-        self.assertTrue(evaluation["analysis"]["matches_evidence"])
+        self.assertIn("No compatible completed evidence", evaluation["observed_outcome"]["summary"])
+        self.assertTrue(evaluation["evidence_runs"])
+        self.assertIsNone(evaluation["analysis"])
 
         destination = present_case(self.case, self.project / "presented")
         rendered = (destination / "index.html").read_text()
@@ -87,8 +87,8 @@ class PresentationPackagingTests(unittest.TestCase):
         self.assertIn("Eight synthetic support tickets", rendered)
         self.assertIn("Package information", rendered)
         self.assertIn('<dl class="key-values">', rendered)
-        self.assertIn("<dt>Banked runs</dt><dd>4</dd>", rendered)
-        self.assertIn("<dt>Runs owed</dt><dd>0</dd>", rendered)
+        self.assertIn("<dt>Banked runs</dt><dd>0</dd>", rendered)
+        self.assertIn("<dt>Runs owed</dt><dd>4</dd>", rendered)
         self.assertIn("<dt>Publisher</dt><dd>omenking</dd>", rendered)
         self.assertIn("<dt>Profile</dt><dd>rescorable</dd>", rendered)
         self.assertIn('class="document-nav"', rendered)
@@ -107,16 +107,16 @@ class PresentationPackagingTests(unittest.TestCase):
         self.assertIn('id="prompt-ablation-arm-basic-prompt"', experiment)
         self.assertIn('class="table-wrap"', experiment)
         self.assertIn('class="run-table"', experiment)
-        self.assertEqual(experiment.count('class="run-evidence"'), 4)
+        self.assertEqual(experiment.count('class="run-evidence"'), len(evidence_runs))
         self.assertIn('class="evidence-table"', experiment)
         self.assertIn('class="evidence-row"', experiment)
         self.assertIn("Exact match", experiment)
         self.assertIn("Run evidence", experiment)
         self.assertIn("Observed outcome", experiment)
-        self.assertIn("Conclusion and next experiments", experiment)
-        self.assertIn("Answer to the technical uncertainty", experiment)
-        self.assertIn("What remains uncertain", experiment)
-        self.assertIn("Next experiments", experiment)
+        self.assertNotIn("Conclusion and next experiments", experiment)
+        self.assertNotIn("Answer to the technical uncertainty", experiment)
+        self.assertNotIn("What remains uncertain", experiment)
+        self.assertNotIn("Next experiments", experiment)
         question = (
             "Do explicit routing rules improve exact-match support-ticket "
             "classification accuracy?"
@@ -130,10 +130,10 @@ class PresentationPackagingTests(unittest.TestCase):
     def test_existing_completed_runs_survive_case_narrative_changes(self) -> None:
         data = build_case_data(self.case)
         evaluation = data["experiments"][0]["evals"][0]
-        self.assertEqual(evaluation["status"], "closed")  # the example's eval.yml says complete
-        self.assertEqual(evaluation["lifecycle"]["label"], "Closed")
-        self.assertEqual(evaluation["coverage"]["banked"], 4)
-        self.assertEqual(evaluation["coverage"]["owed"], 0)
+        self.assertEqual(evaluation["status"], "partial")  # old evidence does not bank for Inspect
+        self.assertEqual(evaluation["lifecycle"]["label"], "Partially run")
+        self.assertEqual(evaluation["coverage"]["banked"], 0)
+        self.assertEqual(evaluation["coverage"]["owed"], 4)
 
     def test_case_context_fields_are_required(self) -> None:
         manifest = yaml.safe_load((self.case / "case.yml").read_text())

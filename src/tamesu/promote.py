@@ -38,11 +38,6 @@ class PromotionPlan:
 def plan_promotion(context: EvalContext, to: str) -> PromotionPlan:
     if not supports_promotion(task_for(context.evaluation, context.case)):
         raise ExecutionError(f"Task of {context.eval_id} has no accepted-image output to promote.")
-    if context.evaluation["status"] != "complete":
-        raise ExecutionError(
-            f"Cannot promote {context.eval_id}: the eval is {context.evaluation['status']!r}; "
-            "close it first so acceptance is final."
-        )
     match = DESTINATION_PATTERN.fullmatch(to)
     if match is None:
         raise ExecutionError("--to must look like <case>/<new-dataset-name> (lowercase kebab-case).")

@@ -79,14 +79,14 @@ class LifecycleTests(unittest.TestCase):
             return lc.lifecycle_for(context, self.plan, full)
 
     def test_every_state_is_derived_from_facts(self) -> None:
-        self.assertEqual(self.state({}, status="draft").state, lc.DRAFT)
+        self.assertEqual(self.state({}, status="draft").state, lc.READY)
         self.assertEqual(self.state({}).state, lc.READY)
         self.assertEqual(self.state({"banked": 1, "owed": 2}).state, lc.PARTIAL)
         self.assertEqual(self.state({"partial": 1}).state, lc.PARTIAL)
         self.assertEqual(self.state({"failed": 1, "owed": 3}).state, lc.PARTIAL)
         self.assertEqual(self.state({"banked": 3, "owed": 0}, pending=(2, 2)).state, lc.AWAITING_REVIEW)
         self.assertEqual(self.state({"banked": 3, "owed": 0}).state, lc.EVIDENCE_COMPLETE)
-        self.assertEqual(self.state({"banked": 3, "owed": 0}, status="complete").state, lc.CLOSED)
+        self.assertEqual(self.state({"banked": 3, "owed": 0}, status="complete").state, lc.EVIDENCE_COMPLETE)
 
     def test_banked_runs_alone_never_mean_complete(self) -> None:
         awaiting = self.state({"banked": 3, "owed": 0}, pending=(1, 1))
@@ -95,8 +95,8 @@ class LifecycleTests(unittest.TestCase):
 
     def test_closing_with_a_gap_is_visible_in_the_badge_data(self) -> None:
         closed = self.state({"banked": 3, "owed": 0}, status="complete", pending=(2, 2), closing={"pending_items": 2})
-        self.assertEqual(closed.state, lc.CLOSED)
-        self.assertIn("closed with 2 item(s) still pending review", closed.modifiers[0])
+        self.assertEqual(closed.state, lc.AWAITING_REVIEW)
+        self.assertEqual(closed.pending_items, 2)
 
     def test_stale_and_failed_runs_are_modifiers_not_states(self) -> None:
         state = self.state({"stale": 2, "failed": 1, "banked": 3, "owed": 0})
@@ -158,9 +158,9 @@ class ContractTests(unittest.TestCase):
     def test_draft_is_labelled_with_how_to_proceed(self) -> None:
         self.fixture.write_eval({"status": "draft"})
         html = self.fixture.html()
-        self.assertIn("Draft", html)
-        self.assertIn("tamesu activate", html)
-        self.assertIn("eval status is &#x27;draft&#x27;", html)
+        self.assertIn("Ready to run", html)
+        self.assertNotIn("tamesu activate", html)
+        self.assertNotIn("eval status is &#x27;draft&#x27;", html)
 
     def test_a_template_error_is_shown_on_the_page_without_the_local_path(self) -> None:
         (self.fixture.exp / "prompts" / "user.md.j2").write_text("{{ item.nope }}\n")

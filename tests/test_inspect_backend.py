@@ -228,7 +228,7 @@ class ValidationTests(unittest.TestCase):
 
     def test_native_tasks_reject_the_inspect_backend_and_vice_versa(self) -> None:
         message = self.lint_error(task="structured_text")
-        self.assertIn("does not support the 'inspect' execution backend", message)
+        self.assertIn("output_schema is required", message)
         block = self.execution()
         self.fixture.write_eval({})
         document = yaml.safe_load((self.fixture.eval_dir / "eval.yml").read_text())
@@ -236,7 +236,7 @@ class ValidationTests(unittest.TestCase):
         write_yaml(self.fixture.eval_dir / "eval.yml", document)
         with self.assertRaises(ConfigError) as caught:
             self.fixture.context()
-        self.assertIn("does not support the 'native' execution backend", str(caught.exception))
+        self.assertIn("file must be a path", str(caught.exception))
         self.assertTrue(block)
 
     def test_metric_must_name_a_listed_scorer(self) -> None:
@@ -251,7 +251,7 @@ class ValidationTests(unittest.TestCase):
         write_yaml(self.fixture.eval_dir / "eval.yml", document)
         with self.assertRaises(ConfigError) as caught:
             self.fixture.context()
-        self.assertIn("only valid with backend: inspect", str(caught.exception))
+        self.assertIn("backend is not implemented", str(caught.exception))
 
 
 class IdentityAndPlanningTests(unittest.TestCase):

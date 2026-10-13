@@ -1,118 +1,68 @@
 # Tamesu
 
-![./docs/logo-new.png](./docs/logo-new.png)
+Tamesu documents AI experiments and carries their results in portable packages.
+[Inspect AI](https://inspect.aisi.org.uk/) runs the tests and automated scorers.
+Tamesu adds a live results overview and optional human review of text, code, images,
+or multiple artifacts.
 
-Tamesu is a small, file-based framework for designing, running, and preserving
-reproducible AI experiments.
+## Start
 
-> **Treat an AI evaluation as an experiment with inspectable evidence—not as a dashboard
-> metric.**
-
-Many evaluation workflows begin with a dataset, a task, or a list of models. Tamesu begins
-with a real-world question, isolates the factor being tested, freezes a measurement plan,
-and preserves what happened as evidence in ordinary files.
-
-I built it to address what I call
-[the White Rabbit Problem](docs/white-rabbit-problem.md): an agent workload can appear
-close to working while each iteration makes its feasibility less clear.
-
-> **Status:** Tamesu 0.1 implements structured-text evals with deterministic scoring and
-> first-party adapters for OpenAI, Anthropic, Google Gemini, xAI/Grok, Meta, and Amazon
-> Nova through Bedrock. Cases can be rendered as static studies, packaged as reproducible
-> archives, and published through an inspectable static registry. Image tasks, model
-> judges, and human review remain planned.
-
-## Why Tamesu exists
-
-The ecosystem already has capable local test runners, benchmark harnesses, and full
-evaluation platforms. Tamesu is for a narrower problem: organizing reproducible
-investigations into uncertain AI behavior.
-
-It is designed around a few deliberate choices:
-
-- **Experiments instead of disconnected scores.** The structure makes the question,
-  hypothesis, controlled comparison, measurement plan, and resulting evidence explicit.
-- **Plans are separate from evidence.** Manifests declare what is owed; only complete,
-  compatible run artifacts demonstrate what happened.
-- **Files instead of infrastructure.** Plans, outputs, scores, costs, and provenance live
-  in ordinary files that can be inspected, diffed, and versioned without a database or
-  hosted control plane.
-- **A small, hackable codebase.** The implementation should remain understandable enough
-  to modify for a particular experiment without first learning an extensive framework.
-- **Rich execution logging.** Every run produces a durable, append-only event stream for
-  provider attempts, retries, failures, artifacts, usage, and cost.
-- **Low-level provider APIs.** Adapters use direct HTTP interfaces and preserve provider
-  behavior instead of depending on a deep SDK or orchestration stack.
-
-Tamesu is not trying to become a hosted observability platform, prompt-management suite,
-or catalog of hundreds of benchmarks. See [Where Tamesu fits](docs/landscape.md) for the
-tradeoffs.
-
-## Install
-
-Tamesu requires Python 3.12 or newer:
+Requires Python 3.12 or later.
 
 ```sh
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
-tamesu --help
+pip install -e .
+tamesu new eval arithmetic/first/baseline
+# Set META_API_KEY, or edit eval.yml to use a model/provider whose credentials you have.
+tamesu run arithmetic/first/baseline
+tamesu show arithmetic
 ```
 
-## Quick start
+The starter creates three files: `case.yml`, `eval.yml`, and an ordinary Inspect
+`task.py`. Inputs and prompts start inline in `eval.yml`; split them into files
+when useful. The task checks correctness, not just output formatting.
+Record the experiment's question, method, findings, and limitations alongside it.
+There is no draft activation or closing step.
 
-Inside a project (any directory with a `cases/` folder):
+## Share and review
 
 ```sh
-tamesu new eval my-case/first-try/baseline   # writes a case, experiment, and eval to edit
-tamesu show                                  # open http://localhost:8000 and leave it open
-tamesu run baseline                          # run it; refresh the page to see the result
+tamesu pack arithmetic
+tamesu verify build/packages/local-arithmetic-0.1.0.tamesu.tar.gz
+tamesu unpack build/packages/local-arithmetic-0.1.0.tamesu.tar.gz --cases-dir received/cases
+cd received
+tamesu show arithmetic
 ```
 
-`new` writes commented files at each level of the tree. Edit the question, prompt, dataset, and
-models, then refresh the page: it shows what will run and what it can cost before you spend
-anything.
+Packages contain the experiment definitions, results, artifacts, and any recorded
+reviews. They do not need publishing metadata or a hosting service. Viewing and
+human review do not call a model or execute the included task code. Rerunning a
+received task requires reviewing its code and passing `--trust-code`.
 
-Tamesu organizes evaluation work into four levels:
+Add a rubric through `evaluation.human_review` to enable human review. Only include
+`human` in `evaluation.acceptance.requires` if that review must gate acceptance.
+Then export a blinded review pack, open its `review.html`, and import the downloaded
+responses. Review records bind the artifacts and rubric by checksum.
 
-```text
-Case → Experiment → Eval → Run
+```sh
+tamesu review export arithmetic/first/baseline --out review-pack
+tamesu review import arithmetic/first/baseline review-pack/responses.yml
 ```
 
-- A **case** defines the broader problem and shared data.
-- An **experiment** isolates a hypothesis.
-- An **eval** freezes the question and measurement plan.
-- A **run** preserves one execution and its evidence.
+Automated model grading belongs in Inspect scorers. Images generated through the
+existing image APIs use an Inspect model adapter; there is no native runner.
+Older stored evidence remains viewable, but does not satisfy a changed experiment.
 
-## Documentation
+Use `tamesu show` for a live overview with answers and checks at a glance, item-completion
+updates, recorded cost to six decimal places, and **Review / update decisions**
+that saves directly. `/api/state` provides the same live state to scripts.
+Costs update when items finish; they are not a provider billing stream.
 
-Start here:
+Read the [author-first walkthrough](docs/happy-path-walkthrough.md) or
+[tutorial](docs/tutorial.md) for the full flow and
+[reference docs](docs/reference/README.md) for file contracts and migration details.
 
-- [Tutorial, Part 1: run your first eval](docs/tutorial.md)
-- [C rendering engine walkthrough](examples/c-rendering-engine/WALKTHROUGH.md)
+## Development
 
-Reference:
-
-- [The White Rabbit Problem](docs/white-rabbit-problem.md)
-- [The Tamesu approach: from question to evidence](docs/approach.md)
-- [Core concepts](docs/concepts.md)
-- [Where Tamesu fits in the evaluation landscape](docs/landscape.md)
-- [Tutorial, Part 2: present, package, and ship a case](docs/tutorial-presentation-packaging-shipping.md)
-- [Repository and file structure](docs/file-structure.md)
-- [Manifest reference](docs/manifests.md)
-- [Command-line interface](docs/cli.md)
-- [Image evals: generate, judge, review, promote](docs/image-evals.md)
-- [Execution backends and Inspect AI](docs/execution-backends.md)
-- [What `present` is, and what it shows when](docs/present.md)
-- [Presentation and case package contract](docs/packages.md)
-- [Tamesu Showcase registry](https://github.com/ExamProCo/tamesu-showcase)
-- [Configuration](docs/configuration.md)
-- [Using Tamesu with coding agents](docs/coding-agents.md)
-- [Providers and models](docs/providers.md)
-- [Logging and execution evidence](docs/logging.md)
-- [Contributor development guide](docs/development.md)
-
-## Examples
-
-- [Support-ticket classification](examples/support-ticket-classification/README.md)
-- [C rendering engine](examples/c-rendering-engine/README.md) (executable eval in Docker, human review)
+```sh
+python -m unittest discover -s tests -v
+```

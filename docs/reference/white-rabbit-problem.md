@@ -1,6 +1,6 @@
 # The White Rabbit Problem
 
-![Alice following the White Rabbit](the-white-rabbit-problem.jpg)
+![Alice following the White Rabbit](../the-white-rabbit-problem.jpg)
 
 I want to solve what I call the White Rabbit Problem.
 

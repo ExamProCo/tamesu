@@ -43,76 +43,6 @@ What these results do not show.
 ## Next steps
 """
 
-EVAL = """\
-name: {eval}
-question: >
-  The one question this eval answers.
-description: >
-  What is compared, and what is held fixed.
-
-task: structured_text
-dataset: ../../../../datasets/{case}-v1/dataset.yml
-output_schema: ../../schemas/answer.schema.json
-
-defaults:
-  repetitions: 1
-  concurrency: 1
-  timeout_seconds: 120
-  retries: 1
-  budget_usd: 0.50          # the run refuses to start if its estimate exceeds this
-  parameters:
-    max_tokens: 1024
-
-arms:                       # each arm is one way of prompting; add more to compare prompts
-  - id: baseline
-    description: The prompt as written.
-    prompts:
-      system: ../../prompts/system.md
-      user: ../../prompts/user.md.j2
-
-runs:                       # each entry is a model; add more to compare models
-  - model: muse-spark-1.2
-    provider: meta
-    arms: [baseline]
-
-evaluation:
-  mechanical:
-    - valid_json
-    - schema_valid
-
-metrics:
-  primary: invalid_output_rate
-"""
-
-DATASET = """\
-name: {case}-v1
-description: The inputs every model and arm receives.
-items:
-  - id: example-1
-    input:
-      question: Replace this with a real input.
-    expected:
-      answer: The answer you expect, if there is one.
-"""
-
-SYSTEM_PROMPT = """\
-Answer the question. Return one JSON object with an `answer` field and nothing else.
-"""
-
-USER_PROMPT = """\
-{{{{ item.input.question }}}}
-"""
-
-SCHEMA = """\
-{{
-  "type": "object",
-  "required": ["answer"],
-  "properties": {{"answer": {{"type": "string"}}}},
-  "additionalProperties": false
-}}
-"""
-
-
 def create(project_root: Path, level: str, path: str) -> list[Path]:
     """Create the named level and any missing parents. Never overwrites a file."""
     parts = path.strip("/").split("/")
@@ -128,17 +58,12 @@ def create(project_root: Path, level: str, path: str) -> list[Path]:
     files: dict[Path, str] = {case_dir / "case.yml": CASE.format(case=case, title=_title(case))}
     if experiment:
         experiment_dir = case_dir / "experiments" / experiment
-        files[experiment_dir / "README.md"] = EXPERIMENT_README.format(title=_title(experiment))
+        if not evaluation:
+            files[experiment_dir / "README.md"] = EXPERIMENT_README.format(title=_title(experiment))
     if evaluation:
-        files.update(
-            {
-                experiment_dir / "evals" / evaluation / "eval.yml": EVAL.format(eval=evaluation, case=case),
-                case_dir / "datasets" / f"{case}-v1" / "dataset.yml": DATASET.format(case=case),
-                experiment_dir / "prompts" / "system.md": SYSTEM_PROMPT,
-                experiment_dir / "prompts" / "user.md.j2": USER_PROMPT.format(),
-                experiment_dir / "schemas" / "answer.schema.json": SCHEMA.format(),
-            }
-        )
+        eval_dir = experiment_dir / "evals" / evaluation
+        files[eval_dir / "eval.yml"] = INSPECT_EVAL.format(eval=evaluation, case=case)
+        files[eval_dir / "task.py"] = INSPECT_TASK
     target = {"case": case_dir / "case.yml", "experiment": case_dir / "experiments" / str(experiment),
               "eval": case_dir / "experiments" / str(experiment) / "evals" / str(evaluation)}[level]
     if target.exists():
@@ -155,3 +80,69 @@ def create(project_root: Path, level: str, path: str) -> list[Path]:
 
 def _title(name: str) -> str:
     return name.replace("-", " ").capitalize()
+
+
+INSPECT_EVAL = """\
+schema_version: 1
+name: {eval}
+question: Can the model answer this question correctly?
+description: Compare answers using Inspect, then record findings here.
+task: artifact_bundle
+dataset:
+  name: {case}-v1
+  description: A small starter dataset; replace it with real examples.
+  items:
+    - id: example-1
+      input: {{question: "What is 2 + 2?"}}
+      expected: "4"
+execution:
+  file: task.py
+  task: experiment
+  sources: [task.py]
+  limits: {{cost_limit: 0.05, time_limit: 120}}
+  artifacts:
+    required: [response]
+    review: response
+defaults:
+  repetitions: 1
+  concurrency: 1
+  timeout_seconds: 120
+  retries: 1
+  budget_usd: 0.50
+  parameters: {{max_tokens: 1024}}
+arms:
+  - id: baseline
+    description: Answer directly.
+    prompts:
+      system: {{text: "Answer with only the answer."}}
+      user: {{text: "{{{{ item.input.question }}}}"}}
+runs:
+  - model: muse-spark-1.2
+    provider: meta
+    arms: [baseline]
+evaluation:
+  mechanical: [correctness]
+metrics:
+  primary: mean_score:correctness
+"""
+
+INSPECT_TASK = '''from inspect_ai import Task, task
+from inspect_ai.dataset import json_dataset
+from inspect_ai.scorer import Score, accuracy, scorer
+from inspect_ai.solver import generate
+from tamesu.inspect_support import stager
+
+
+@scorer(metrics=[accuracy()])
+def correctness():
+    async def score(state, target):
+        answer = state.output.completion.strip()
+        stager(str(state.sample_id)).add("response", "answer.txt", answer, "text/plain")
+        return Score(value=1.0 if answer == target.text.strip() else 0.0, answer=answer)
+    return score
+
+
+@task
+def experiment(dataset: str):
+    return Task(dataset=json_dataset(dataset), solver=generate(), scorer=correctness())
+'''

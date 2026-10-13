@@ -44,6 +44,8 @@ def image_facts(plan: Any) -> list[str]:
         cost = evidence["cost"]
         if cost["total_usd"] is not None:
             lines.append(f"  - Cost: ${cost['total_usd']:.4f} total (generation ${cost['generation_usd']:.4f}, judging ${cost['judge_usd']:.4f}).")
+    if context.evaluation.get("task") == "artifact_bundle":
+        lines = [line.replace("produced an image", "produced reviewable artifacts") for line in lines]
     return lines
 
 

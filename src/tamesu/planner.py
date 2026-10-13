@@ -7,7 +7,7 @@ from typing import Any
 from . import __version__
 from .config import load_yaml, resolve_contained
 from .identity import digest_value, inventory_files
-from .models import EvalContext, Plan, RunSpec
+from .models import EvalContext, Plan, RunSpec, InlinePrompt
 from .backends import backend_for
 from .tasks import get_task
 
@@ -25,7 +25,7 @@ def build_plan(context: EvalContext) -> Plan:
         for arm_id in run["arms"]:
             arm = arm_by_id[arm_id]
             prompt_paths = {
-                role: resolve_contained(context.eval_dir, raw_path, context.project_root)
+                role: InlinePrompt(raw_path["text"]) if isinstance(raw_path, dict) else resolve_contained(context.eval_dir, raw_path, context.project_root)
                 for role, raw_path in arm["prompts"].items()
             }
             parameters = dict(defaults.get("parameters", {}))
@@ -123,7 +123,7 @@ def make_run_spec(
     )
     specification_payload.update(backend_fields)
     execution_paths = [
-        *prompts.values(),
+        *(path for path in prompts.values() if isinstance(path, Path)),
         Path(__file__).with_name("scoring.py"),
         *get_task(specification_task).code_files(),
         *backend_files,

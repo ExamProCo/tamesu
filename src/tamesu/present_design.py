@@ -201,8 +201,6 @@ def _cost(plan: Plan) -> dict[str, Any]:
 def _blockers(context: EvalContext, plan: Plan, state: Lifecycle) -> list[str]:
     """Static blockers only: nothing is probed, so this never needs Docker or a network."""
     found: list[str] = []
-    if context.evaluation.get("status") == "draft":
-        found.append("eval status is 'draft'; run `tamesu activate` after reviewing the plan")
     for provider in sorted({spec.provider for spec in plan.owed_specs}):
         names = PROVIDER_KEYS.get(provider, (f"{provider.upper()}_API_KEY",))
         if not any(os.environ.get(name) for name in names):

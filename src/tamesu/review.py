@@ -1,8 +1,8 @@
 """Human review: export a blinded pack, review anywhere, import immutable decisions.
 
-Reviewers see images in shuffled order under random presentation IDs. The mapping back to
-{run, item, image checksum} lives in a key file kept outside the pack, so a reviewer cannot
-learn which arm or model produced an image. Reviewer identity is a free-text ID, not
+Reviewers see artifacts in shuffled order under random presentation IDs. The mapping back to
+{run, item, subject checksum} lives in a key file kept outside the pack, so a reviewer cannot
+learn which arm or model produced an artifact. Reviewer identity is a free-text ID, not
 authentication: this is a lab notebook, not an audit system.
 """
 
@@ -148,7 +148,7 @@ def export_pack(
         if include_reviewed or human_state(current, acceptance)["owed"]:
             owed.append(entry)
     if not owed:
-        raise ExecutionError("No images are owed review. Use --all to export reviewed images again.")
+        raise ExecutionError("No artifacts are owed review. Use --all to export reviewed artifacts again.")
 
     seed = seed if seed is not None else random.SystemRandom().getrandbits(48)
     rng = random.Random(seed)
@@ -183,15 +183,26 @@ def export_pack(
                 f"{presentation_id}: image carries embedded metadata ({', '.join(sorted(leaks))}) "
                 "that may identify the generator"
             )
-        filename = f"{presentation_id}{entry.image_path.suffix}"
-        shutil.copyfile(entry.image_path, images_dir / filename)
-        pack_items.append(
-            {"presentation_id": presentation_id, "image": f"images/{filename}", "input": entry.item.get("input", {})}
-        )
+        subjects = entry.result.get("review_subjects") or [entry.result["output"]]
+        artifacts = []
+        for index, subject in enumerate(subjects):
+            source = entry.item_dir / subject["path"]
+            suffix = "" if len(subjects) == 1 else f"-{index}"
+            filename = f"{presentation_id}{suffix}{source.suffix}"
+            shutil.copyfile(source, images_dir / filename)
+            artifact = {"path": f"images/{filename}", "media_type": subject["media_type"], "role": subject.get("role", "output")}
+            if subject["media_type"].startswith("text/") or subject["media_type"] in {"application/json", "application/xml"}:
+                artifact["text"] = source.read_text(encoding="utf-8", errors="replace")
+            artifacts.append(artifact)
+        pack_item = {"presentation_id": presentation_id, "artifacts": artifacts, "input": entry.item.get("input", {})}
+        if len(artifacts) == 1 and artifacts[0]["media_type"].startswith("image/"):
+            pack_item["image"] = artifacts[0]["path"]
+        pack_items.append(pack_item)
         key_items[presentation_id] = {
             "run_id": entry.run_id,
             "item_id": entry.item_id,
             "image_sha256": digest,
+            "input_sha256": entry.result.get("prompt", {}).get("input_sha256"),
         }
     result.exported = len(pack_items)
 
@@ -246,7 +257,7 @@ def export_pack(
 
 _REVIEW_HTML = """<!doctype html>
 <meta charset="utf-8">
-<title>Image review</title>
+<title>Artifact review</title>
 <style>
 body{font:15px system-ui,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem;color:#222}
 .item{border:1px solid #ccc;border-radius:8px;padding:1rem;margin:1rem 0}
@@ -255,10 +266,10 @@ img{max-width:100%;max-height:420px;display:block;margin-bottom:.5rem}
 .brief{color:#555;font-size:13px;white-space:pre-wrap}
 button{font:inherit;padding:.5rem 1rem}
 </style>
-<h1>Image review</h1>
+<h1>Artifact review</h1>
 <p>Reviewer ID: <input id="reviewer" placeholder="your-id"> &nbsp;
 <button id="save">Download responses.yml</button> <span id="status"></span></p>
-<p class="brief">Pass or fail every dimension for each image. Leave an image untouched to review it later.
+<p class="brief">Pass or fail every dimension for each item. Leave an item untouched to review it later.
 Save the file next to the pack and run <code>tamesu review import</code>.</p>
 <div id="items"></div>
 <script>
@@ -268,12 +279,21 @@ const root = document.getElementById("items");
 PACK.items.forEach((item) => {
   state[item.presentation_id] = {};
   const box = document.createElement("div"); box.className = "item";
-  const img = document.createElement("img"); img.src = item.image; img.alt = item.presentation_id;
+  const content = document.createElement("div");
+  (item.artifacts || [{path: item.image, media_type: "image/png"}]).forEach((artifact) => {
+    if (artifact.media_type.startsWith("image/")) {
+      const img = document.createElement("img"); img.src = artifact.path; img.alt = artifact.role || item.presentation_id; content.append(img);
+    } else if (artifact.text !== undefined) {
+      const pre = document.createElement("pre"); pre.style.whiteSpace = "pre-wrap"; pre.textContent = artifact.text; content.append(pre);
+    } else {
+      const link = document.createElement("a"); link.href = artifact.path; link.download = ""; link.textContent = "Download " + (artifact.role || "artifact"); content.append(link);
+    }
+  });
   const brief = document.createElement("div"); brief.className = "brief";
   brief.textContent = JSON.stringify(item.input, null, 2);
   const notes = document.createElement("input"); notes.placeholder = "notes (optional)"; notes.style.width = "100%";
   notes.addEventListener("input", () => { state[item.presentation_id].notes = notes.value; });
-  box.append(img, brief);
+  box.append(content, brief);
   PACK.rubric.dimensions.forEach((dim) => {
     const row = document.createElement("div"); row.className = "dim";
     const name = document.createElement("strong"); name.textContent = dim.id + ": ";
@@ -382,7 +402,7 @@ def import_responses(context: EvalContext, responses_path: Path) -> ImportResult
 
     pack_id = document.get("pack_id")
     key_path = keys_dir(context) / f"{pack_id}.yml" if isinstance(pack_id, str) and pack_id else None
-    if key_path is None or not key_path.is_file():
+    if key_path is None or not key_path.resolve().is_relative_to(keys_dir(context).resolve()) or not key_path.is_file():
         raise ReviewImportError([f"unknown pack_id {pack_id!r}; no export key found for this eval"])
     key = load_yaml(key_path)
     if key.get("mode") not in PACK_MODES:
@@ -451,15 +471,26 @@ def import_responses(context: EvalContext, responses_path: Path) -> ImportResult
             recorded[dimension.id] = {"pass": outcome["pass"], "reason_code": code}
         if len(recorded) != len(rubric.dimensions):
             continue
-        run_dir = context.eval_dir / "runs" / entry["run_id"]
-        item_dir = run_dir / "items" / entry["item_id"]
+        run_name, item_name = entry.get("run_id"), entry.get("item_id")
+        if not all(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value) and value not in {".", ".."} for value in (run_name, item_name)):
+            problems.append(f"{where}: invalid review key paths")
+            continue
+        run_dir = context.eval_dir / "runs" / run_name
+        item_dir = run_dir / "items" / item_name
         result_path = item_dir / "result.yml"
         current_sha = None
         if result_path.is_file():
-            output = load_yaml(result_path).get("output")
-            if isinstance(output, dict):
-                image_path = item_dir / output["path"]
-                current_sha = digest_file(image_path) if image_path.is_file() else None
+            stored = load_yaml(result_path)
+            output = stored.get("output")
+            from .tasks.image_generation import is_stale
+            if isinstance(output, dict) and not is_stale(item_dir, stored):
+                current_sha = output.get("sha256")
+        from .planner import items_by_id
+        current_item = items_by_id(context).get(entry["item_id"])
+        from .identity import digest_value
+        if entry.get("input_sha256") and (current_item is None or digest_value(current_item.get("input", {})) != entry["input_sha256"]):
+            problems.append(f"{where}: the dataset input changed since export; export a new pack")
+            continue
         if current_sha != entry["image_sha256"]:
             problems.append(f"{where}: the stored image changed since export ({presentation_id}); export a new pack")
             continue
@@ -476,6 +507,7 @@ def import_responses(context: EvalContext, responses_path: Path) -> ImportResult
             "run_id": entry["run_id"],
             "item_id": entry["item_id"],
             "image_sha256": entry["image_sha256"],
+            "subject_sha256": entry["image_sha256"],
             "pack_id": pack_id,
             "reviewer": reviewer,
             "submitted_at": submitted_at.isoformat().replace("+00:00", "Z"),

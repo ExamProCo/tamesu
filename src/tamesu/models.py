@@ -6,6 +6,17 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class InlinePrompt:
+    text: str
+
+    def read_text(self, **kwargs: Any) -> str:
+        return self.text
+
+    def __str__(self) -> str:
+        return "inline prompt"
+
+
+@dataclass(frozen=True)
 class EvalContext:
     project_root: Path
     case_dir: Path

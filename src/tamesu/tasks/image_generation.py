@@ -193,12 +193,6 @@ class ImageGenerationTask:
             prompt_hashes=hashes,
         )
 
-    def call_provider(
-        self, provider: Any, context: EvalContext, spec: RunSpec, prepared: PreparedItem
-    ) -> Any:
-        return provider.generate_image(
-            model=spec.model, request=prepared.payload, timeout_seconds=spec.timeout_seconds
-        )
 
     def materialize(
         self,
@@ -483,5 +477,9 @@ def is_stale(item_dir: Path, result: dict[str, Any]) -> bool:
     output = result.get("output")
     if not isinstance(output, dict):
         return False
-    path = item_dir / str(output.get("path", ""))
-    return not path.is_file() or digest_file(path) != output.get("sha256")
+    outputs = [output, *result.get("review_subjects", [])]
+    for member in outputs:
+        path = (item_dir / str(member.get("path", ""))).resolve()
+        if not path.is_relative_to(item_dir.resolve()) or not path.is_file() or digest_file(path) != member.get("sha256"):
+            return True
+    return False

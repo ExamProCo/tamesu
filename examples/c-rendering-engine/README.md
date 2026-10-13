@@ -19,10 +19,10 @@ in a `response` field so the complete implementation can be stored as one artifa
 
 ## Evaluation boundary
 
-The installed Tamesu version can validate and store text but cannot materialize a project,
-compile C, render an image, or conduct human review for a structured-text task. Its native
-metrics therefore cover response generation, JSON/schema validity, latency, and cost—not
-implementation quality.
+This structured-text example validates and stores text. Its metrics cover JSON/schema
+validity, latency, and cost. To compile code, render images, and attach those artifacts
+for optional human review, use an Inspect task with `artifact_bundle`; see the
+[tutorial](../../docs/tutorial.md). Schema checks do not establish implementation quality.
 
 After running, extract each `response` into an isolated directory and assess it with the
 [manual review rubric](cases/c-rendering-engine/experiments/muse-version-comparison/rubrics/rendering-engine-quality.md).
@@ -38,10 +38,9 @@ tamesu lint cases/c-rendering-engine
 tamesu plan single-shot
 ```
 
-After reviewing the plan, activate it. Activation does not call the provider:
+Review the plan before running:
 
 ```sh
-tamesu activate single-shot
 ```
 
 The paid run makes three calls: one to each Muse Spark version.
@@ -74,7 +73,6 @@ and the reviewer both pass it.
 pip install 'tamesu[inspect]'     # needs Docker running
 tamesu lint cases/c-rendering-engine
 tamesu plan executable
-tamesu activate executable
 tamesu run executable
 tamesu review export executable --out review/pack
 # review in review/pack/review.html, then:
@@ -83,7 +81,7 @@ tamesu report executable
 ```
 
 Run these from this directory (it holds `cases/`). See
-[Execution backends and Inspect AI](../../docs/execution-backends.md) and the technical
+[Execution backends and Inspect AI](../../docs/reference/execution-backends.md) and the technical
 journal in the experiment README. Reasoning models can spend the whole `max_tokens` budget
 thinking and return an empty answer, so the eval uses `effort: low`; check each item's
 `stop_reason` before blaming the model.

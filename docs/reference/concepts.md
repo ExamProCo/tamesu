@@ -223,4 +223,4 @@ The core model follows a few practical rules:
 - The repository remains understandable without running Tamesu.
 
 For the detailed implementation contract, see the
-[evaluation framework implementation plan](../plans/EVALUATION-FRAMEWORK-IMPLEMENTATION.md).
+[evaluation framework implementation plan](../../plans/EVALUATION-FRAMEWORK-IMPLEMENTATION.md).

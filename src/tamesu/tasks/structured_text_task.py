@@ -16,7 +16,7 @@ from .structured_text import render_prompts
 class StructuredTextTask:
     name = "structured_text"
     prompt_roles = ("system", "user")
-    supported_backends = frozenset({"native"})
+    supported_backends = frozenset({"inspect"})
     supports_judges = False
     supports_review = False
     required_capabilities = frozenset({"text_output", "structured_output"})
@@ -94,17 +94,6 @@ class StructuredTextTask:
             prompt_hashes=hashes,
         )
 
-    def call_provider(
-        self, provider: Any, context: EvalContext, spec: RunSpec, prepared: PreparedItem
-    ) -> Any:
-        return provider.generate_text(
-            model=spec.model,
-            system_prompt=prepared.payload["system"],
-            user_prompt=prepared.payload["user"],
-            output_schema=context.output_schema or {},
-            parameters=spec.parameters,
-            timeout_seconds=spec.timeout_seconds,
-        )
 
     def materialize(
         self,

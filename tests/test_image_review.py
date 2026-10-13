@@ -157,7 +157,7 @@ class ExportTests(ReviewBase):
         import_responses(self.context, self.out / "responses.yml")
         with self.assertRaises(ExecutionError) as caught:
             self.export(out=self.project.root / "again")
-        self.assertIn("No images are owed review", str(caught.exception))
+        self.assertIn("No artifacts are owed review", str(caught.exception))
         self.export(out=self.project.root / "again-all", include_reviewed=True)
 
     def test_force_replaces_an_earlier_pack_but_only_a_pack(self) -> None:

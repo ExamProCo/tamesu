@@ -142,7 +142,7 @@ def present_artifact_bundle(ctx: Any) -> Any:
     elif result.get("missing_artifacts"):
         headline = f"missing required artifact(s): {', '.join(result['missing_artifacts'])}"
     if (result.get("outcome") or {}).get("status") == "invalid_artifact" and headline is None:
-        headline = f"no reviewable image ({result['outcome'].get('reason')})"
+        headline = f"no reviewable artifact ({result['outcome'].get('reason')})"
 
     score_rows = [
         [name, record.get("value"), "pass" if record.get("pass") else "fail", record.get("answer") or record.get("explanation") or ""]
@@ -176,11 +176,12 @@ def present_artifact_bundle(ctx: Any) -> Any:
         output = result.get("output") or {}
         reason = (result.get("outcome") or {}).get("reason")
         shown = None
-        if output:
+        if output and str(output.get("media_type", "")).startswith("image/"):
             candidate = ctx.item_dir / str(output.get("path", ""))
             match = next((c for c in copy if c["source"] == str(candidate)), None)
             shown = match["target"] if match else None
-        grid.append([blocks.image("Render", shown, ctx.item_dir.name, missing=f"No image ({reason}).")])
+        if str(output.get("media_type", "")).startswith("image/"):
+            grid.append([blocks.image("Render", shown, ctx.item_dir.name, missing=f"No image ({reason}).")])
     grid.append([blocks.json_pre("Input", ctx.item.get("input"))])
     grid.append([blocks.table("Scores", ["scorer", "value", "result", "detail"], score_rows)])
     if has_review:

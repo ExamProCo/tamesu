@@ -76,9 +76,6 @@ class Task(Protocol):
 
     def prepare(self, context: EvalContext, spec: RunSpec, item: dict[str, Any]) -> PreparedItem: ...
 
-    def call_provider(
-        self, provider: Any, context: EvalContext, spec: RunSpec, prepared: PreparedItem
-    ) -> Any: ...
 
     def materialize(
         self,

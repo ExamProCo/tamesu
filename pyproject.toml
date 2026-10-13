@@ -11,13 +11,12 @@ requires-python = ">=3.12"
 dependencies = [
   "PyYAML>=6.0",
   "Pillow>=10.0",
-]
-
-[project.optional-dependencies]
-inspect = [
   "inspect-ai>=0.3.277,<0.4",
   "openai>=1.0",
 ]
+
+[project.optional-dependencies]
+inspect = []  # Compatibility alias: Inspect is now a core dependency.
 
 [project.scripts]
 tamesu = "tamesu.cli:main"

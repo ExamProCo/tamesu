@@ -90,13 +90,14 @@ class ArtifactBundleTask:
         review_role = (evaluation.get("execution") or {}).get("artifacts", {}).get("review")
         if (block.get("human_review") or block.get("acceptance")) and not review_role:
             errors.append(
-                "human_review and acceptance need eval.execution.artifacts.review naming the image "
-                "artifact role reviewers should see"
+                "human_review and acceptance need eval.execution.artifacts.review naming the review "
+                "artifact roles reviewers should see"
             )
-        if review_role and review_role not in (
+        review_roles = [review_role] if isinstance(review_role, str) else review_role if isinstance(review_role, list) and all(isinstance(role, str) for role in review_role) else []
+        if any(role not in (
             set((evaluation.get("execution") or {}).get("artifacts", {}).get("required", []))
             | set((evaluation.get("execution") or {}).get("artifacts", {}).get("allowed", []))
-        ):
+        ) for role in review_roles):
             errors.append("eval.execution.artifacts.review must be one of the required or allowed roles")
         metrics = evaluation.get("metrics", {})
         for metric in [metrics.get("primary"), *(metrics.get("secondary") or [])]:
@@ -138,8 +139,6 @@ class ArtifactBundleTask:
         self._native_only()
         raise AssertionError
 
-    def call_provider(self, provider: Any, context: EvalContext, spec: RunSpec, prepared: PreparedItem) -> Any:
-        self._native_only()
 
     def materialize(
         self, context: EvalContext, spec: RunSpec, item: dict[str, Any], item_dir: Path, response: Any
@@ -163,29 +162,34 @@ class ArtifactBundleTask:
         role = ((context.evaluation.get("execution") or {}).get("artifacts") or {}).get("review")
         if not role:
             return
-        match = next((a for a in result.get("artifacts", []) if a["role"] == role), None)
-        if match is None:
+        from ..artifacts import write_json
+        from ..identity import digest_file
+        roles = [role] if isinstance(role, str) else role
+        matches = [a for wanted in roles for a in result.get("artifacts", []) if a["role"] == wanted]
+        if len(matches) != len(roles):
             result["outcome"] = {"status": "invalid_artifact", "reason": "missing_review_artifact"}
             return
-        path = context.eval_dir / match["path"]
-        if not str(match["media_type"]).startswith("image/"):
-            result["outcome"] = {"status": "invalid_artifact", "reason": "review_artifact_not_an_image"}
-            return
-        try:
-            with Image.open(path) as image:
-                image.load()
-                width, height = image.size
-        except Exception:  # noqa: BLE001 - any decode failure is the same outcome
-            result["outcome"] = {"status": "invalid_artifact", "reason": "undecodable_image"}
-            return
+        subjects = []
+        for match in matches:
+            path = context.eval_dir / match["path"]
+            subject = {"role": match["role"], "path": path.relative_to(item_dir).as_posix(), "sha256": match["sha256"], "media_type": match["media_type"]}
+            if str(match["media_type"]).startswith("image/"):
+                try:
+                    with Image.open(path) as image:
+                        image.load()
+                        subject.update(width=image.width, height=image.height)
+                except Exception:
+                    result["outcome"] = {"status": "invalid_artifact", "reason": "undecodable_image"}
+                    return
+            subjects.append(subject)
         result["outcome"] = {"status": "generated", "reason": "ok"}
-        result["output"] = {
-            "path": path.relative_to(item_dir).as_posix(),
-            "sha256": match["sha256"],
-            "media_type": match["media_type"],
-            "width": width,
-            "height": height,
-        }
+        result["review_subjects"] = subjects
+        if len(subjects) == 1:
+            result["output"] = dict(subjects[0])
+        else:
+            manifest = item_dir / "review-subjects.json"
+            write_json(manifest, subjects)
+            result["output"] = {"path": manifest.name, "sha256": digest_file(manifest), "media_type": "application/json"}
 
     def estimate_item_cost(
         self, context: EvalContext, spec: RunSpec, item: dict[str, Any]

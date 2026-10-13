@@ -27,7 +27,8 @@ from .identity import digest_bytes, digest_file, digest_value
 from .logging import CallLogWriter
 from .models import EvalContext, ImagePart, TextPart
 from .evidence import select_generated_items
-from .providers import StructuredMultimodalProvider, get_provider
+from .providers import StructuredMultimodalProvider
+from .inspect_provider import get_provider
 from .providers.models import estimate_cost, max_tokens_for
 from .rubric import (
     Rubric,
@@ -179,10 +180,6 @@ def judge_eval(
     judge_id: str | None = None,
     limit_items: int | None = None,
 ) -> JudgeSummary:
-    if context.evaluation["status"] != "active":
-        raise ExecutionError(
-            f"Eval status must be active for judging; found {context.evaluation['status']!r}."
-        )
     judges = load_judges(context)
     if judge_id is not None:
         judges = [judge for judge in judges if judge.id == judge_id]

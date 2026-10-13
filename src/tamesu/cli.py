@@ -30,7 +30,6 @@ from .packaging import (
     verify_archive,
 )
 from .presenting import present_case
-from .providers import get_provider
 from .providers.models import MODELS, PRICING_VERIFIED_AT
 from .pricing import estimate_plan_cost, recorded_cost
 from .reporting import (
@@ -81,11 +80,6 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser = subparsers.add_parser("plan", help="Preview concrete work and blockers.")
     plan_parser.add_argument("eval_id")
 
-    activate_parser = subparsers.add_parser(
-        "activate", help="Validate and activate a draft eval."
-    )
-    activate_parser.add_argument("eval_id")
-
     run_parser = subparsers.add_parser("run", help="Execute planned eval work.")
     run_parser.add_argument("eval_id")
     run_parser.add_argument("--only", metavar="MODEL")
@@ -125,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     review_export.add_argument("--reviewer", help="Prefill the reviewer ID in responses.yml.")
     review_export.add_argument("--seed", type=int, help="Seed for the shuffle (default: random).")
     review_export.add_argument(
-        "--all", dest="include_reviewed", action="store_true", help="Include images already reviewed."
+        "--all", dest="include_reviewed", action="store_true", help="Include artifacts already reviewed."
     )
     review_export.add_argument(
         "--force",
@@ -161,15 +155,6 @@ def build_parser() -> argparse.ArgumentParser:
         "report", help="Build a human-readable eval report."
     )
     report_parser.add_argument("eval_id")
-
-    close_parser = subparsers.add_parser("close", help="Close a completed eval.")
-    close_parser.add_argument("eval_id")
-    close_parser.add_argument(
-        "--allow-incomplete-review",
-        action="store_true",
-        help="Close an image eval although required judgments or reviews are missing "
-        "(recorded in closing.yml).",
-    )
 
     present_parser = subparsers.add_parser(
         "present", help="Render a case as a static HTML case study."
@@ -247,7 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-MAIN_COMMANDS = ("new", "run", "show", "status", "list")
+MAIN_COMMANDS = ("new", "run", "pack", "unpack", "show", "review")
 
 
 def _group_commands(parser: argparse.ArgumentParser, subparsers: Any) -> None:
@@ -344,8 +329,7 @@ def dispatch(args: argparse.Namespace) -> int:
         return command_present(project_root, args)
     if args.command == "plan":
         return command_plan(project_root, args.eval_id)
-    if args.command == "activate":
-        return command_activate(project_root, args.eval_id)
+
     if args.command == "run":
         return command_run(
             project_root,
@@ -379,10 +363,7 @@ def dispatch(args: argparse.Namespace) -> int:
         return command_leaderboard(project_root, args.eval_id)
     if args.command == "report":
         return command_report(project_root, args.eval_id)
-    if args.command == "close":
-        return command_close(
-            project_root, args.eval_id, allow_incomplete_review=args.allow_incomplete_review
-        )
+
     if args.command == "present":
         return command_present(project_root, args)
     if args.command == "analyze":
@@ -462,7 +443,7 @@ def command_list(project_root: Path) -> int:
     for path in paths:
         eval_id = eval_id_from_path(project_root, path)
         manifest = load_yaml(path)
-        print(f"{eval_id}\t{manifest.get('status', 'active')}")
+        print(eval_id)
     return 0
 
 
@@ -521,7 +502,6 @@ def command_plan(project_root: Path, eval_id: str) -> int:
     arms = sorted({spec.arm_id for spec in plan.specs})
     calls = sum(len(spec.item_ids) for spec in plan.owed_specs)
     print(f"Eval: {eval_id}")
-    print(f"Status: {context.evaluation['status']}")
     print(f"Execution backend: {backend_for(context.evaluation).name}")
     print(f"Models: {', '.join(models)}")
     print(f"Arms: {', '.join(arms)}")
@@ -549,54 +529,16 @@ def command_plan(project_root: Path, eval_id: str) -> int:
         print(f"Stale runs: {len(plan.stale_run_ids)}")
     blockers: list[str] = []
     backend = backend_for(context.evaluation)
-    if backend.name == "native":
-        for provider_name in sorted({spec.provider for spec in plan.owed_specs}):
-            error = get_provider(provider_name).credential_error()
-            if error:
-                blockers.append(f"{provider_name}: {error}")
-    else:
-        try:
-            backend.check_ready(context, list(plan.owed_specs), trust_code=False)
-        except ExecutionError as exc:
-            blockers.append(str(exc))
-    if context.evaluation["status"] != "active":
-        blockers.append(f"eval status is {context.evaluation['status']!r}")
+    try:
+        backend.check_ready(context, list(plan.owed_specs), trust_code=False)
+    except ExecutionError as exc:
+        blockers.append(str(exc))
     if blockers:
         print("Execution blockers:")
         for blocker in blockers:
             print(f"- {blocker}")
     else:
         print("Execution blockers: none")
-    return 0
-
-
-def command_activate(project_root: Path, eval_id: str) -> int:
-    context = load_eval_context(project_root, eval_id)
-    status = context.evaluation["status"]
-    if status == "active":
-        print(f"{eval_id} is already active.")
-        return 0
-    if status == "complete":
-        raise TamesuError(
-            f"Cannot activate {eval_id}: the eval is complete. Create a new eval or "
-            "make an explicit reviewed manifest edit."
-        )
-
-    # Activation is the boundary between authoring and paid execution. Render every
-    # prompt before crossing it so errors hidden in an unselected item cannot be
-    # activated. This performs no provider calls and does not require credentials.
-    _render_all_prompts(context)
-
-    eval_path = context.eval_dir / "eval.yml"
-    source = eval_path.read_text(encoding="utf-8")
-    updated, replacements = re.subn(
-        r"(?m)^status:\s*draft\s*$", "status: active", source, count=1
-    )
-    if replacements != 1:
-        raise TamesuError(f"Could not update draft status in {eval_path}")
-    write_text(eval_path, updated)
-    load_eval_context(project_root, eval_id)
-    print(f"Activated {eval_id}.")
     return 0
 
 
@@ -752,7 +694,7 @@ def command_review(project_root: Path, args: argparse.Namespace) -> int:
             include_reviewed=args.include_reviewed,
             force=args.force,
         )
-        print(f"Exported {result.exported} image(s) to {result.out_dir} ({result.pack_id}).")
+        print(f"Exported {result.exported} artifact(s) to {result.out_dir} ({result.pack_id}).")
         print(f"Key (keep it away from reviewers): {result.key_path}")
         for run, item, reason in result.skipped:
             print(f"skipped\t{run}\t{item}\t{reason}")
@@ -787,9 +729,11 @@ def command_present(project_root: Path, args: argparse.Namespace) -> int:
     if args.serve:
         import webbrowser
 
-        from .present_watch import serve, watch
+        from .present_watch import watch
 
-        server = serve(render(), args.port)
+        from .live import serve_live
+
+        server = serve_live(render(), args.port, case_dir)
         url = f"http://localhost:{server.server_address[1]}/"
         print(f"Serving {case_dir.name} at {url} (re-renders on change; Ctrl-C to stop)")
         if args.open:
@@ -801,6 +745,7 @@ def command_present(project_root: Path, args: argparse.Namespace) -> int:
         finally:
             server.shutdown()
             server.server_close()
+            server.review_temporary.cleanup()
         return 0
     if args.watch:
         from .present_watch import watch
@@ -964,96 +909,14 @@ def command_report(project_root: Path, eval_id: str) -> int:
     return 0
 
 
-def command_close(
-    project_root: Path, eval_id: str, *, allow_incomplete_review: bool = False
-) -> int:
-    context = load_eval_context(project_root, eval_id)
-    if context.evaluation["status"] == "complete":
-        print(f"{eval_id} is already complete.")
-        return 0
-    plan = build_plan(context)
-    if plan.owed_specs:
-        raise TamesuError(
-            f"Cannot close {eval_id}: {len(plan.owed_specs)} planned run(s) are still owed."
-        )
-    closing = _close_review_gate(context, plan, allow_incomplete_review)
-    for run_id in plan.banked_run_ids.values():
-        if not (context.eval_dir / "runs" / run_id / "report.yml").is_file():
-            raise TamesuError(f"Cannot close {eval_id}: run {run_id} has no report.yml.")
-    if closing is not None:
-        write_yaml(context.eval_dir / "closing.yml", closing)
-
-    eval_path = context.eval_dir / "eval.yml"
-    source = eval_path.read_text(encoding="utf-8")
-    updated, replacements = re.subn(
-        r"(?m)^status:\s*(draft|active|complete)\s*$", "status: complete", source, count=1
-    )
-    if replacements == 0:  # status was left to its default
-        updated, replacements = re.subn(r"(?m)^(name:.*)$", r"\1\nstatus: complete", source, count=1)
-    if replacements != 1:
-        raise TamesuError(f"Could not update status in {eval_path}")
-    write_text(eval_path, updated)
-    closed_context = load_eval_context(project_root, eval_id)
-    from .analysis import stamp_existing
-
-    stamp_existing(closed_context)  # bind an existing analysis to the final evidence; never create one
-    closed_plan = build_plan(closed_context)
-    build_leaderboard(closed_plan)
-    build_evaluation_report(closed_plan)
-    print(f"Closed {eval_id}.")
-    return 0
 
 
-def _close_review_gate(context: Any, plan: Any, allow_incomplete: bool) -> dict[str, Any] | None:
-    """For image evals: refuse to close while required judgments or reviews are missing."""
-    from .tasks import task_for
 
-    if not task_for(context.evaluation, context.case).supports_review:
-        return None
-    from .acceptance import run_evidence
-    from datetime import UTC, datetime
 
-    runs: dict[str, Any] = {}
-    owed = 0
-    for run_id in sorted(plan.banked_run_ids.values()):
-        run_dir = context.eval_dir / "runs" / run_id
-        evidence = run_evidence(context, run_dir)
-        counts = evidence["counts"]
-        stale = counts["stale_images"] + counts["stale_judgments"] + counts["stale_reviews"]
-        runs[run_id] = {
-            "accepted": counts["accepted"],
-            "rejected": counts["rejected"],
-            "pending": counts["pending"],
-            "owed_reviews": evidence["review"]["owed_reviews"],
-            "stale_evidence_records": stale,
-        }
-        owed += counts["pending"]
-    if owed and not allow_incomplete:
-        lines = [
-            f"- {run_id}: {info['pending']} item(s) pending "
-            f"({info['owed_reviews']} review(s) owed)"
-            for run_id, info in runs.items()
-            if info["pending"]
-        ]
-        raise TamesuError(
-            f"Cannot close {context.eval_id}: required evidence is missing.\n"
-            + "\n".join(lines)
-            + "\nImport the missing reviews or judgments, or pass --allow-incomplete-review "
-            "to close anyway (the gap is recorded in closing.yml)."
-        )
-    return {
-        "schema_version": 1,
-        "eval_id": context.eval_id,
-        "closed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "allow_incomplete_review": bool(allow_incomplete),
-        "incomplete_evidence": bool(owed),
-        "pending_items": owed,
-        "runs": runs,
-    }
 
 
 def _render_all_prompts(context: Any) -> None:
-    from .planner import build_plan, items_by_id
+    from .planner import items_by_id
     from .tasks import task_for
 
     task = task_for(context.evaluation, context.case)

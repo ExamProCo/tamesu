@@ -1,8 +1,4 @@
-"""One definition of where an eval is in its life, shared by present, status and report.
-
-The state is derived from facts on disk, never from run counts alone: an eval whose runs are
-all banked can still be waiting for blinded review, and `close` is a deliberate author act.
-"""
+"""Evidence status derived from runs and pending review, independent of authored labels."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,25 +8,21 @@ from .config import load_yaml
 from .models import EvalContext, Plan
 
 INVALID = "invalid"
-DRAFT = "draft"
 READY = "ready"
 PARTIAL = "partial"
 AWAITING_REVIEW = "awaiting-review"
 EVIDENCE_COMPLETE = "evidence-complete"
-CLOSED = "closed"
 
-STATES = (INVALID, DRAFT, READY, PARTIAL, AWAITING_REVIEW, EVIDENCE_COMPLETE, CLOSED)
+STATES = (INVALID, READY, PARTIAL, AWAITING_REVIEW, EVIDENCE_COMPLETE)
 LABELS = {
     INVALID: "Invalid",
-    DRAFT: "Draft",
     READY: "Ready to run",
     PARTIAL: "Partially run",
     AWAITING_REVIEW: "Awaiting review",
     EVIDENCE_COMPLETE: "Evidence complete",
-    CLOSED: "Closed",
 }
 # States in which no result exists yet, so nothing may be presented as an outcome.
-NO_RESULT_STATES = frozenset({INVALID, DRAFT, READY})
+NO_RESULT_STATES = frozenset({INVALID, READY})
 
 
 @dataclass(frozen=True)
@@ -89,29 +81,9 @@ def lifecycle_for(context: EvalContext, plan: Plan, counts: dict[str, int]) -> L
     if counts.get("failed"):
         modifiers.append(f"{counts['failed']} failed run(s)")
 
-    status = context.evaluation.get("status")
-    if status == "complete":
-        gaps = 0
-        closing = context.eval_dir / "closing.yml"
-        if closing.is_file():
-            gaps = int(load_yaml(closing).get("pending_items", 0) or 0)
-        if gaps:
-            modifiers.insert(0, f"closed with {gaps} item(s) still pending review")
-        return Lifecycle(
-            CLOSED, LABELS[CLOSED], "The author closed this eval; its evidence is final.",
-            tuple(modifiers), pending, owed_reviews,
-        )
-    if status == "draft":
-        return Lifecycle(
-            DRAFT,
-            LABELS[DRAFT],
-            f"Check it with `tamesu plan {eval_id}`, then `tamesu activate {eval_id}`. "
-            "A draft cannot run.",
-            tuple(modifiers),
-        )
     if not counts.get("banked") and not counts.get("partial") and not counts.get("failed"):
         return Lifecycle(
-            READY, LABELS[READY], f"Active and nothing has run: `tamesu run {eval_id}`.", tuple(modifiers)
+            READY, LABELS[READY], f"Nothing has run: `tamesu run {eval_id}`.", tuple(modifiers)
         )
     if counts.get("owed") or counts.get("partial") or counts.get("failed"):
         return Lifecycle(
@@ -136,7 +108,7 @@ def lifecycle_for(context: EvalContext, plan: Plan, counts: dict[str, int]) -> L
     return Lifecycle(
         EVIDENCE_COMPLETE,
         LABELS[EVIDENCE_COMPLETE],
-        f"All planned runs are banked and no evidence is owed. `tamesu close {eval_id}` when final.",
+        f"All planned runs are banked and no evidence is owed.",
         tuple(modifiers),
     )
 

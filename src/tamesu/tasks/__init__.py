@@ -21,9 +21,8 @@ def get_task(name: str) -> Task:
 
 
 def supported_backends(task: Task) -> frozenset[str]:
-    """Execution backends a task runs on. Defaults to native; declared in a task module only when
-    that module is not part of run identity (image_generation's is, so it relies on the default)."""
-    return getattr(task, "supported_backends", frozenset({"native"}))
+    """All executable task types use Inspect."""
+    return getattr(task, "supported_backends", frozenset({"inspect"}))
 
 
 def supports_promotion(task: Task) -> bool:

@@ -134,4 +134,4 @@ The Tamesu hierarchy exists to preserve this chain of reasoning:
 | Run | Records one execution and its evidence |
 
 Next, read [Core concepts](concepts.md) for the detailed model or follow the
-[text-eval tutorial](tutorial.md) to see the workflow end to end.
+[text-eval tutorial](../tutorial.md) to see the workflow end to end.

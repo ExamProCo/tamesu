@@ -625,7 +625,7 @@ Each run has a schema-versioned, append-only event stream containing lifecycle e
 provider attempts, artifact references, terminal item records, and framework failures.
 The complete event contract, durability behavior, ordering rules, and redaction boundary
 are defined in [Logging and execution evidence](logging.md) and the
-[log-event JSON Schema](../schemas/log-event.schema.json).
+[log-event JSON Schema](../../schemas/log-event.schema.json).
 
 The log is execution evidence, but it does not replace `run.yml`, `result.yml`, stored
 outputs, or `report.yml`. Provider request bodies and raw prompts are not written to it.

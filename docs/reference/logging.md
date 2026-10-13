@@ -47,7 +47,7 @@ Readers must ignore unknown event types and fields from the same schema version.
 reject an unsupported schema version rather than guessing its meaning.
 
 The machine-readable contract is
-[`schemas/log-event.schema.json`](../schemas/log-event.schema.json).
+[`schemas/log-event.schema.json`](../../schemas/log-event.schema.json).
 
 ## Event types
 

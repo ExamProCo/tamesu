@@ -4,7 +4,6 @@ import platform
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,12 +13,11 @@ from .artifacts import write_yaml
 from .config import load_yaml
 from .discovery import find_run_dir
 from .backends import BackendRun, backend_for
-from .errors import ExecutionError, ProviderError
+from .errors import ExecutionError
 from .identity import digest_file
 from .logging import CallLogWriter
 from .models import EvalContext, RunSpec
 from .planner import build_plan, items_by_id, limit_spec
-from .providers import get_provider  # noqa: F401  (patched by tests; native backend reads it here)
 from .pricing import estimate_plan_cost, recorded_cost
 from .run_report import build_report
 from .tasks import task_for
@@ -33,10 +31,6 @@ def run_eval(
     force: bool = False,
     trust_code: bool = False,
 ) -> list[str]:
-    if context.evaluation["status"] != "active":
-        raise ExecutionError(
-            f"Eval status must be active for execution; found {context.evaluation['status']!r}."
-        )
     if limit_items is not None and limit_items < 1:
         raise ExecutionError("--limit-items must be at least 1")
 
@@ -322,8 +316,6 @@ def _duration(seconds: float) -> str:
 
 
 def resume_run(context: EvalContext, run_id: str, *, trust_code: bool = False) -> str:
-    if context.evaluation["status"] != "active":
-        raise ExecutionError("An eval must be active before a partial run can resume.")
     run_dir = find_run_dir(context.project_root, run_id)
     manifest = load_yaml(run_dir / "run.yml")
     if manifest.get("eval_id") != context.eval_id:
@@ -368,207 +360,6 @@ def resume_run(context: EvalContext, run_id: str, *, trust_code: bool = False) -
     _check_budget(plan, (spec,))
     backend_for(context.evaluation).check_ready(context, [spec], trust_code=trust_code)
     return execute_spec(context, spec, existing_run_dir=run_dir)
-
-
-def _process_item(
-    context: EvalContext,
-    spec: RunSpec,
-    run_id: str,
-    run_dir: Path,
-    log: CallLogWriter,
-    provider: Any,
-    item_id: str,
-    item: dict[str, Any],
-) -> dict[str, Any]:
-    item_dir = run_dir / "items" / item_id
-    result_path = item_dir / "result.yml"
-    previous: dict[str, Any] | None = None
-    if result_path.is_file():
-        previous = load_yaml(result_path)
-        if previous.get("state") == "complete":
-            return previous
-        error = previous.get("error", {})
-        if previous.get("state") == "failed" and not error.get("retryable", False):
-            return previous
-
-    starting_attempts = int(previous.get("attempts", 0)) if previous else 0
-    task = task_for(context.evaluation, context.case)
-    try:
-        prepared = task.prepare(context, spec, item)
-    except Exception as exc:
-        safe_message = log.safe_text(exc)
-        result = {
-            "schema_version": 1,
-            "item_id": item_id,
-            "state": "failed",
-            "attempts": starting_attempts,
-            "error": {
-                "type": type(exc).__name__,
-                "message": safe_message,
-                "retryable": False,
-            },
-        }
-        write_yaml(result_path, result)
-        _log_item_terminal(context, run_id, item_id, result_path, result, log)
-        return result
-
-    prompt_metadata = prepared.request_metadata
-
-    final_error: ProviderError | None = None
-    response = None
-    latency_ms = 0
-    total_attempts = starting_attempts
-    for attempt_offset in range(spec.retries + 1):
-        attempt = starting_attempts + attempt_offset + 1
-        total_attempts = attempt
-        attempt_started = time.monotonic()
-        try:
-            response = task.call_provider(provider, context, spec, prepared)
-            latency_ms = round((time.monotonic() - attempt_started) * 1000)
-            log.append(
-                "provider_attempt",
-                run_id=run_id,
-                item_id=item_id,
-                stage="generate",
-                attempt=attempt,
-                at=_utc_now(),
-                provider=spec.provider,
-                model=spec.model,
-                ok=True,
-                duration_ms=latency_ms,
-                request=prompt_metadata,
-                provider_request_id=response.request_id,
-                response_metadata=response.response_metadata,
-                usage=response.usage,
-                cost_usd=response.cost_usd,
-            )
-            break
-        except ProviderError as exc:
-            latency_ms = round((time.monotonic() - attempt_started) * 1000)
-            final_error = _safe_provider_error(exc, log)
-            log.append(
-                "provider_attempt",
-                run_id=run_id,
-                item_id=item_id,
-                stage="generate",
-                attempt=attempt,
-                at=_utc_now(),
-                provider=spec.provider,
-                model=spec.model,
-                ok=False,
-                duration_ms=latency_ms,
-                request=prompt_metadata,
-                provider_request_id=exc.request_id,
-                response_metadata=exc.response_metadata,
-                usage=exc.usage,
-                cost_usd=exc.cost_usd,
-                error={
-                    "type": type(exc).__name__,
-                    "message": str(final_error),
-                    "retryable": exc.retryable,
-                    "status_code": exc.status_code,
-                },
-            )
-            if not exc.retryable or attempt_offset >= spec.retries:
-                break
-            time.sleep(min(2**attempt_offset, 5))
-        except Exception as exc:
-            latency_ms = round((time.monotonic() - attempt_started) * 1000)
-            final_error = ProviderError(
-                f"unexpected {type(exc).__name__}: {log.safe_text(exc)}",
-                retryable=False,
-            )
-            log.append(
-                "provider_attempt",
-                run_id=run_id,
-                item_id=item_id,
-                stage="generate",
-                attempt=attempt,
-                at=_utc_now(),
-                provider=spec.provider,
-                model=spec.model,
-                ok=False,
-                duration_ms=latency_ms,
-                request=prompt_metadata,
-                provider_request_id=None,
-                response_metadata={},
-                usage={},
-                cost_usd=None,
-                error={
-                    "type": type(exc).__name__,
-                    "message": str(final_error),
-                    "retryable": False,
-                    "status_code": None,
-                },
-            )
-            break
-
-    if response is None:
-        assert final_error is not None
-        result = {
-            "schema_version": 1,
-            "item_id": item_id,
-            "state": "failed",
-            "attempts": total_attempts,
-            "generation": {
-                "provider_request_id": final_error.request_id,
-                "latency_ms": latency_ms,
-                "usage": final_error.usage,
-                "cost_usd": final_error.cost_usd,
-                "response_metadata": log.redact(final_error.response_metadata),
-            },
-            "prompt": dict(prepared.prompt_hashes),
-            "error": {
-                "type": type(final_error).__name__,
-                "message": str(final_error),
-                "retryable": final_error.retryable,
-                "status_code": final_error.status_code,
-                "provider_request_id": final_error.request_id,
-            },
-        }
-        write_yaml(result_path, result)
-        _log_item_terminal(context, run_id, item_id, result_path, result, log)
-        return result
-
-    materialized = task.materialize(context, spec, item, item_dir, response)
-    log.append(
-        "artifacts_written",
-        at=_utc_now(),
-        run_id=run_id,
-        item_id=item_id,
-        artifacts=materialized.artifacts,
-    )
-
-    result = {
-        "schema_version": 1,
-        "item_id": item_id,
-        "state": "complete",
-        "attempts": total_attempts,
-        **materialized.result_fields,
-        "generation": {
-            "provider_request_id": response.request_id,
-            "latency_ms": latency_ms,
-            "usage": response.usage,
-            "cost_usd": response.cost_usd,
-            "response_metadata": log.redact(response.response_metadata),
-        },
-        "prompt": dict(prepared.prompt_hashes),
-    }
-    write_yaml(result_path, result)
-    _log_item_terminal(context, run_id, item_id, result_path, result, log)
-    return result
-
-
-def _safe_provider_error(error: ProviderError, log: CallLogWriter) -> ProviderError:
-    return ProviderError(
-        log.safe_text(error),
-        retryable=error.retryable,
-        status_code=error.status_code,
-        request_id=error.request_id,
-        usage=error.usage,
-        cost_usd=error.cost_usd,
-        response_metadata=log.redact(error.response_metadata),
-    )
 
 
 def _log_item_terminal(
@@ -631,7 +422,7 @@ def _run_manifest(
             "budget_usd": spec.budget_usd,
             "parameters": spec.parameters,
             "prompts": {
-                role: path.relative_to(context.project_root).as_posix()
+                role: {"text": path.text} if hasattr(path, "text") else path.relative_to(context.project_root).as_posix()
                 for role, path in spec.prompts.items()
             },
         },
@@ -644,10 +435,9 @@ def _run_manifest(
         "totals": totals,
     }
     backend = backend_for(context.evaluation)
-    if backend.name != "native":
-        manifest["execution"] = backend.run_manifest_extra(
-            context, spec, context.eval_dir / "runs" / run_id
-        )
+    manifest["execution"] = backend.run_manifest_extra(
+        context, spec, context.eval_dir / "runs" / run_id
+    )
     return manifest
 
 

@@ -21,7 +21,8 @@ class ScaffoldTests(unittest.TestCase):
         created = create(self.root, "eval", "my-case/first/baseline")
         self.assertIn(self.root / "cases/my-case/case.yml", created)
         context = load_eval_context(self.root, "my-case/first/baseline")
-        self.assertEqual(context.evaluation["status"], "active")
+        self.assertNotIn("status", context.evaluation)
+        self.assertEqual(len(created), 3)
 
     def test_new_never_overwrites_and_checks_the_shape(self) -> None:
         create(self.root, "eval", "my-case/first/baseline")

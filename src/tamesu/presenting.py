@@ -489,11 +489,10 @@ def _eval_data(
         for item in context.dataset.get("items", [])
         if isinstance(item, dict) and item.get("id") is not None
     }
-    for spec in plan.specs:
-        run_id = plan.banked_run_ids.get(spec.specification_fingerprint)
-        if run_id is None:
-            continue
-        run_dir = context.eval_dir / "runs" / run_id
+    compatible_ids = set(plan.banked_run_ids.values())
+    run_dirs = [path.parent for path in sorted((context.eval_dir / "runs").glob("*/run.yml"))]
+    for run_dir in run_dirs:
+        run_id = run_dir.name
         run = load_yaml(run_dir / "run.yml")
         resolved = run.get("resolved")
         if not isinstance(resolved, dict):
@@ -553,6 +552,7 @@ def _eval_data(
                 "arm": resolved.get("arm"),
                 "repetition": resolved.get("repetition"),
                 "state": run.get("state"),
+                "compatible": run_id in compatible_ids,
                 "selected_items": len(selected_ids) if isinstance(selected_ids, list) else len(run_items),
                 "completed_items": sum(item.get("state") == "complete" for item in run_items),
                 "failed_items": sum(item.get("state") == "failed" for item in run_items),
@@ -567,8 +567,12 @@ def _eval_data(
     prompts: list[dict[str, str]] = []
     for arm in evaluation.get("arms", []):
         for role, relative in (arm.get("prompts") or {}).items():
-            path = (context.eval_dir / relative).resolve()
-            prompts.append({"arm": str(arm.get("id")), "role": str(role), "path": relative, "text": _clean_untrusted(path.read_text(encoding="utf-8", errors="replace"))})
+            if isinstance(relative, dict):
+                label, text = "inline", relative["text"]
+            else:
+                label = relative
+                text = (context.eval_dir / relative).resolve().read_text(encoding="utf-8", errors="replace")
+            prompts.append({"arm": str(arm.get("id")), "role": str(role), "path": label, "text": _clean_untrusted(text)})
     cost = estimate_plan_cost(plan)
     required_environment = sorted(
         {
@@ -580,10 +584,10 @@ def _eval_data(
             )
         }
     )
-    review = bool(task.supports_review)
+    review = bool(task.supports_review and any(load_yaml(path).get("evidence") for path in context.eval_dir.glob("runs/*/report.yml")))
     if state.state in lc.NO_RESULT_STATES:
         outcome = {
-            "summary": "Nothing has run yet, so this eval has no result. The design below is what will be run.",
+            "summary": "No compatible results for the current configuration; stored run evidence is available below." if evidence_runs else "Nothing has run yet, so this eval has no result. The design below is what will be run.",
             "caveat": state.reason,
         }
     elif review:
@@ -607,7 +611,7 @@ def _eval_data(
             "name": context.dataset.get("name"),
             "description": context.dataset.get("description"),
             "items": len(context.dataset.get("items", [])),
-            "path": evaluation.get("dataset"),
+            "path": "inline" if isinstance(evaluation.get("dataset"), dict) else evaluation.get("dataset"),
         },
         "method": {
             "task": evaluation.get("task", context.case.get("default_task")),
@@ -682,10 +686,9 @@ def _view_only_eval(eval_path: Path) -> dict[str, Any]:
         if measured and not single_sample(measured)
         else None
     )
-    closed = evaluation.get("status") == "complete"
     view_state = lc.Lifecycle(
-        lc.CLOSED if closed else lc.EVIDENCE_COMPLETE if rows else lc.DRAFT,
-        lc.LABELS[lc.CLOSED if closed else lc.EVIDENCE_COMPLETE if rows else lc.DRAFT],
+        lc.EVIDENCE_COMPLETE if rows else lc.READY,
+        lc.LABELS[lc.EVIDENCE_COMPLETE if rows else lc.READY],
         "Report-only package: outputs and review state are withheld.",
     )
     return {
@@ -793,9 +796,12 @@ def _case_html(data: dict[str, Any]) -> str:
 <section id=\"case-overview\"><h2>Case overview</h2><p>{_e(case['description'])}</p><h3>Business use</h3><p>{_e(case['business_use'])}</p><h3>Current problem</h3><p>{_e(case['current_problem'])}</p><h3>Technical uncertainty</h3><p>{_e(case['technical_uncertainty'])}</p></section>
 <section id=\"experiments\"><h2>Experiments</h2><div class=\"grid\">{''.join(cards) or '<p>No experiments found.</p>'}</div></section>
 <section id=\"datasets\"><h2>Datasets</h2><div class=\"grid\">{datasets or '<p>No datasets are used by this case.</p>'}</div></section>
-<section id=\"evidence-coverage\"><h2>Evidence coverage</h2>{_key_values(evidence_rows)}</section>
+<section id=\"evidence-coverage\"><h2>Evidence coverage</h2><p>Planned runs come from the current configuration. Banked runs have compatible completed evidence. Runs owed still need compatible results; older evidence remains below.</p>{_key_values(evidence_rows)}</section>
 <section id=\"package-information\"><h2>Package information</h2>{_key_values(package_rows)}</section>
 <section id=\"trust\"><h2>Trust and verification</h2><p class=\"notice\">{_e(trust)}</p></section>"""
+    if data["publication"].get("publisher") == "unpublished":
+        body = re.sub(r'<section id="(?:package-information|trust)">.*?</section>', '', body, flags=re.S)
+    body += '<p><a href="data.json">Data (JSON)</a></p>'
     return _document(
         str(case["title"]), body, "assets/style.css", _navigation(data)
     )
@@ -1005,8 +1011,8 @@ def _experiment_html(data: dict[str, Any], experiment: dict[str, Any]) -> str:
 <section id=\"{_attr(evaluation['id'])}\">{status_html}<h2>Hypothesis</h2><p class=\"lead\">{_e(evaluation['question'])}</p><p>{_e(evaluation['description'])}</p>
 <h2 id=\"{_attr(evaluation['id'])}-method\">Method</h2><p>Dataset: <code>{_e(evaluation['dataset'].get('name'))}</code> ({_e(evaluation['dataset'].get('items'))} items). Primary metric: <code>{_e(evaluation.get('primary_metric'))}</code>.</p>{dataset_description_html}{_design_html(evaluation)}<h2 id=\"{_attr(evaluation['id'])}-arms\">Arms</h2>{arms}
 <h2 id=\"{_attr(evaluation['id'])}-outcome\">Observed outcome</h2><p class=\"lead\">{_e(outcome.get('summary'))}</p><p>{_e(outcome.get('caveat'))}</p>
-<h2 id=\"{_attr(evaluation['id'])}-results\">Results</h2><div class=\"table-wrap\"><table><thead><tr><th>Model</th><th>Arm</th><th>Repetitions</th><th>Coverage</th>{headings}<th>Input tokens</th><th>Output tokens</th><th>Cost</th></tr></thead><tbody>{table_rows}</tbody></table></div>
-{facts_html}{analysis_html}<h2 id=\"{_attr(evaluation['id'])}-evidence\">Run evidence</h2>{evidence_runs or '<p>No run outputs are included.</p>'}
+{facts_html}<details><summary id=\"{_attr(evaluation['id'])}-results\">Detailed results</summary><div class=\"table-wrap\"><table><thead><tr><th>Model</th><th>Arm</th><th>Repetitions</th><th>Coverage</th>{headings}<th>Input tokens</th><th>Output tokens</th><th>Cost</th></tr></thead><tbody>{table_rows}</tbody></table></div></details>
+{analysis_html}<h2 id=\"{_attr(evaluation['id'])}-evidence\">Run evidence</h2>{evidence_runs or '<p>No run outputs are included.</p>'}
 <h2 id=\"{_attr(evaluation['id'])}-limitations\">Limitations and coverage</h2><ul>{''.join(f'<li>{_e(value)}</li>' for value in limitations)}</ul>{reproduce_html}</section>""")
     body = f"<header id=\"experiment-overview\"><p><a href=\"../index.html\">← {_e(data['case']['title'])}</a></p><p class=\"document-type\">Experiment</p><h1>{_e(experiment['title'])}</h1></header>{''.join(sections)}"
     return _document(
@@ -1031,6 +1037,8 @@ def _navigation(data: dict[str, Any], current_experiment: str | None = None) -> 
         ("Package information", "package-information"),
         ("Trust and verification", "trust"),
     ]
+    if data["publication"].get("publisher") == "unpublished":
+        case_items = [(label, fragment) for label, fragment in case_items if fragment not in {"package-information", "trust"}]
     case_links = "".join(
         f"<li><a href=\"{_attr(case_page)}#{_attr(fragment)}\">{_e(label)}</a></li>"
         for label, fragment in case_items
@@ -1431,6 +1439,9 @@ def _number(value: Any) -> str:
 
 def _image_observed_outcome(plan: Any) -> dict[str, str]:
     summary, caveat = image_outcome(image_row_counts(plan))
+    if plan.context.evaluation.get("task") == "artifact_bundle":
+        summary = summary.replace("images", "items").replace("image(s)", "item(s)").replace("image", "item")
+        caveat = caveat.replace("images", "items").replace("image(s)", "item(s)").replace("image", "item")
     return {"summary": summary, "caveat": caveat}
 
 

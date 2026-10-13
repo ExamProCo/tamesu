@@ -203,7 +203,7 @@ def _validate_eval(
     if name and name != eval_dir.name:
         errors.append(f"eval.name must match directory name {eval_dir.name!r}")
     status = evaluation.get("status")
-    if status not in {"draft", "active", "complete"}:
+    if status is not None and status not in {"draft", "active", "complete"}:
         errors.append("eval.status must be draft, active, or complete")
     _required_string(evaluation, "question", "eval", errors)
     _required_string(evaluation, "description", "eval", errors)
@@ -238,10 +238,11 @@ def _validate_eval(
         errors.append("eval.defaults.parameters must be a mapping")
 
     task_impl = get_task(task) if task in SUPPORTED_TASKS else None
-    backend_name = (evaluation.get("execution") or {}).get("backend", "native")
+    execution = evaluation.get("execution")
+    backend_name = execution.get("backend", "inspect") if isinstance(execution, dict) else "inspect"
     if not isinstance(evaluation.get("execution", {}), dict):
         errors.append("eval.execution must be a mapping")
-        backend_name = "native"
+        backend_name = "inspect"
     if backend_name not in SUPPORTED_BACKENDS:
         errors.append(f"eval.execution.backend is not implemented: {backend_name!r}")
     else:
@@ -281,6 +282,8 @@ def _validate_eval(
         prompts = _require_mapping(arm.get("prompts"), f"eval.arms[{index}].prompts", errors)
         for role in task_impl.prompt_roles if task_impl else ():
             raw_prompt = prompts.get(role)
+            if isinstance(raw_prompt, dict) and set(raw_prompt) == {"text"} and isinstance(raw_prompt["text"], str):
+                continue
             if not isinstance(raw_prompt, str) or not raw_prompt:
                 errors.append(f"eval arm {arm_id or index} must define prompts.{role}")
                 continue
@@ -459,7 +462,12 @@ def apply_eval_defaults(evaluation: Any, eval_dir: Path, project_root: Path) -> 
     omitted field and its written-out default produce the same run identity."""
     if not isinstance(evaluation, dict):
         return evaluation
-    evaluation.setdefault("status", "active")
+    evaluation.setdefault("execution", {})
+    if isinstance(evaluation["execution"], dict):
+        evaluation["execution"].setdefault("backend", "inspect")
+        if evaluation.get("task") in {"structured_text", "image_generation"}:
+            defaults = evaluation.get("defaults") or {}
+            evaluation["execution"].setdefault("limits", {"time_limit": defaults.get("timeout_seconds", 120)})
     block = evaluation.get("execution")
     if isinstance(block, dict) and block.get("backend") == "inspect" and "sources" not in block:
         from .backends.inspect_backend import _source_like_files
@@ -494,10 +502,14 @@ def load_eval_context(project_root: Path, eval_id: str) -> EvalContext:
     case = load_yaml(case_path)
     evaluation = apply_eval_defaults(load_yaml(path), eval_dir, project_root)
     raw_dataset_path = evaluation.get("dataset")
-    if not isinstance(raw_dataset_path, str) or not raw_dataset_path:
-        raise ConfigError("eval.dataset must be a non-empty path")
-    dataset_path = resolve_contained(eval_dir, raw_dataset_path, project_root)
-    dataset = load_yaml(dataset_path)
+    if isinstance(raw_dataset_path, dict):
+        dataset_path = path
+        dataset = raw_dataset_path
+    else:
+        if not isinstance(raw_dataset_path, str) or not raw_dataset_path:
+            raise ConfigError("eval.dataset must be a path or an inline mapping")
+        dataset_path = resolve_contained(eval_dir, raw_dataset_path, project_root)
+        dataset = load_yaml(dataset_path)
 
     errors: list[str] = []
     _validate_case(case, case_dir, errors)

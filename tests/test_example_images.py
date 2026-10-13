@@ -10,7 +10,7 @@ import yaml
 
 from image_fixtures import FakeImageProvider
 
-from tamesu.cli import command_close, command_lint, command_promote
+from tamesu.cli import command_lint, command_promote
 from tamesu.config import load_eval_context, load_yaml
 from tamesu.judging import judge_eval
 from tamesu.planner import build_plan
@@ -59,9 +59,9 @@ class ProductReferenceExampleTests(unittest.TestCase):
     def test_tutorial_flow_runs_end_to_end_on_a_fake_provider(self) -> None:
         self.activate()
         provider = ExampleFakeProvider()
-        with patch("tamesu.runner.get_provider", return_value=provider), patch(
+        with patch("tamesu.inspect_tasks.get_provider", return_value=provider), patch(
             "tamesu.judging.get_provider", return_value=provider
-        ), patch("tamesu.judging.time.sleep"), patch.dict("os.environ", {"META_API_KEY": "x"}):
+        ), patch("tamesu.providers.get_provider", return_value=provider), patch("tamesu.judging.time.sleep"), patch.dict("os.environ", {"META_API_KEY": "x"}):
             context = load_eval_context(self.project, EVAL_ID)
             run_ids = run_eval(context)
             self.assertEqual(len(run_ids), 2)
@@ -77,11 +77,10 @@ class ProductReferenceExampleTests(unittest.TestCase):
             (out / "responses.yml").write_text(yaml.safe_dump(document, sort_keys=False))
             self.assertEqual(len(import_responses(context, out / "responses.yml").written), 6)
 
-            self.assertEqual(command_close(self.project, EVAL_ID), 0)
+            from tamesu.reporting import build_evaluation_report
+            build_evaluation_report(build_plan(context))
             report = (context.eval_dir / "evaluation-report.md").read_text()
             self.assertIn("| Human | 3 | 3 | 3 |", report)
-            closing = load_yaml(context.eval_dir / "closing.yml")
-            self.assertFalse(closing["incomplete_evidence"])
             self.assertEqual(
                 command_promote(self.project, EVAL_ID, "product-reference/accepted-references-v1", dry_run=True), 0
             )

@@ -8,7 +8,8 @@ import yaml
 from image_fixtures import EVAL_ID, ImageProject
 
 from tamesu.acceptance import MIN_AGREEMENT_SAMPLES, cohens_kappa, run_evidence
-from tamesu.cli import command_close, command_status
+from tamesu.cli import command_status
+from tamesu.analysis import stamp_existing
 from tamesu.config import load_eval_context, load_yaml
 from tamesu.errors import TamesuError
 from tamesu.judging import judge_eval
@@ -232,32 +233,7 @@ class MetricsTests(unittest.TestCase):
 
 
 class CloseAndStatusTests(unittest.TestCase):
-    def test_close_refuses_until_reviews_exist_then_records_the_gate(self) -> None:
-        harness = Harness(self, review=True)
-        root = harness.project.root
-        with self.assertRaises(TamesuError) as caught:
-            command_close(root, EVAL_ID)
-        self.assertIn("required evidence is missing", str(caught.exception))
-        self.assertIn("2 item(s) pending", str(caught.exception))
-        harness.review({GOOD: True, BAD: False})
-        self.assertEqual(command_close(root, EVAL_ID), 0)
-        closing = load_yaml(harness.context.eval_dir / "closing.yml")
-        self.assertFalse(closing["allow_incomplete_review"])
-        self.assertFalse(closing["incomplete_evidence"])
-        self.assertEqual(closing["runs"][harness.run_id]["accepted"], 1)
-        self.assertEqual(load_eval_context(root, EVAL_ID).evaluation["status"], "complete")
 
-    def test_allow_incomplete_review_closes_and_records_the_gap(self) -> None:
-        harness = Harness(self, review=True)
-        command_close(harness.project.root, EVAL_ID, allow_incomplete_review=True)
-        closing = load_yaml(harness.context.eval_dir / "closing.yml")
-        self.assertTrue(closing["allow_incomplete_review"])
-        self.assertTrue(closing["incomplete_evidence"])
-        self.assertEqual(closing["pending_items"], 2)
-
-    def test_mechanical_only_image_eval_closes_without_review(self) -> None:
-        harness = Harness(self)
-        self.assertEqual(command_close(harness.project.root, EVAL_ID), 0)
 
     def test_status_reports_owed_work_and_stale_evidence(self) -> None:
         import contextlib
@@ -443,14 +419,14 @@ class AnalysisSeparationTests(unittest.TestCase):
         harness = Harness(self, review=True)
         harness.review({GOOD: True, BAD: False})
         path = harness.context.eval_dir / "analysis.md"
-        command_close(harness.project.root, EVAL_ID)
+        stamp_existing(harness.context)
         self.assertFalse(path.exists())
         harness2 = Harness(self, review=True)
         harness2.review({GOOD: True, BAD: False})
         path2 = harness2.context.eval_dir / "analysis.md"
         path2.write_text("Done, in my words.\n")
         self.assertIn("not verified", self.evaluation(harness2)["analysis"]["label"])
-        command_close(harness2.project.root, EVAL_ID)
+        stamp_existing(harness2.context)
         self.assertTrue(path2.read_text().startswith("---\nevidence_digest: sha256:"))
         label = self.evaluation(harness2)["analysis"]
         self.assertTrue(label["matches_evidence"])
@@ -463,7 +439,7 @@ class AnalysisSeparationTests(unittest.TestCase):
         harness = Harness(self, review=True)
         harness.review({GOOD: True, BAD: False})
         (harness.context.eval_dir / "analysis.md").write_text("TODO: answer this.\n")
-        command_close(harness.project.root, EVAL_ID)  # stamps even with TODOs present
+        stamp_existing(harness.context)  # stamps even with TODOs present
         self.assertEqual(
             self.evaluation(harness)["analysis"]["label"], "Draft analysis: unfinished (TODO lines remain)"
         )

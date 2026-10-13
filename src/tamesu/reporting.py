@@ -9,6 +9,7 @@ from typing import Any
 from . import __version__
 from .artifacts import write_text
 from .config import load_yaml
+from .lifecycle import lifecycle_for
 from .models import Plan
 from .planner import read_run_manifests
 
@@ -168,7 +169,7 @@ def build_leaderboard(plan: Plan) -> Path:
         "",
         f"- Eval: `{plan.context.eval_id}`",
         f"- Dataset: `{plan.context.dataset['name']}`",
-        f"- Status: `{plan.context.evaluation['status']}`",
+        f"- Status: `{lifecycle_for(plan.context, plan, status_summary(plan)['counts']).state}`",
         f"- Primary metric: `{primary}`",
         f"- Generated: `{_utc_now()}`",
         f"- Scorer: `tamesu {__version__}`",
@@ -229,7 +230,7 @@ def build_evaluation_report(plan: Plan) -> Path:
         "",
         f"- Eval: `{plan.context.eval_id}`",
         f"- Dataset: `{plan.context.dataset['name']}` ({dataset_items} authored items)",
-        f"- Status: `{plan.context.evaluation['status']}`",
+        f"- Status: `{lifecycle_for(plan.context, plan, status_summary(plan)['counts']).state}`",
         f"- State: {_state_line(plan, counts)}",
         f"- Primary metric: `{primary}`",
         f"- Generated: `{_utc_now()}`",

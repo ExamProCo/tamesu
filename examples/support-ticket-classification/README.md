@@ -2,7 +2,7 @@
 
 This is a small, text-only Tamesu project for the
 [first eval tutorial](../../docs/tutorial.md) and the
-[presentation and shipping tutorial](../../docs/tutorial-presentation-packaging-shipping.md).
+[presentation and shipping tutorial](../../docs/reference/tutorial-presentation-packaging-shipping.md).
 It asks whether explicit decision rules
 improve a model's ability to classify synthetic support tickets.
 
@@ -61,7 +61,7 @@ The included `.env.example` can be copied to `.env` and filled in locally.
 When running this bundled example, a `.env` at the Tamesu repository root is inherited
 automatically.
 
-See the [configuration guide](../../docs/configuration.md) for precedence and alternatives.
+See the [configuration guide](../../docs/reference/configuration.md) for precedence and alternatives.
 
 Generated runs, call logs, leaderboards, evaluation reports, and coding-agent analyses are
 ignored in this example so trying the tutorial does not add disposable evidence to Git.

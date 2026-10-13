@@ -143,17 +143,25 @@ def validate_portable(case_dir: Path) -> None:
     failures: list[str] = []
     for eval_path in sorted(case_dir.glob("experiments/*/evals/*/eval.yml")):
         evaluation = load_yaml(eval_path)
-        dataset_path = _portable_reference(eval_path.parent, evaluation.get("dataset"), case_dir, "eval.dataset", failures)
+        raw_dataset = evaluation.get("dataset")
+        dataset_path = None if isinstance(raw_dataset, dict) else _portable_reference(eval_path.parent, raw_dataset, case_dir, "eval.dataset", failures)
         _portable_reference(eval_path.parent, evaluation.get("output_schema"), case_dir, "eval.output_schema", failures)
         for index, arm in enumerate(evaluation.get("arms", [])):
             if not isinstance(arm, dict):
                 continue
             for role, raw in (arm.get("prompts") or {}).items():
-                _portable_reference(eval_path.parent, raw, case_dir, f"eval.arms[{index}].prompts.{role}", failures)
+                if not isinstance(raw, dict):
+                    _portable_reference(eval_path.parent, raw, case_dir, f"eval.arms[{index}].prompts.{role}", failures)
             for index2, raw in enumerate(arm.get("references", [])):
                 _portable_reference(eval_path.parent, raw, case_dir, f"eval.arms[{index}].references[{index2}]", failures)
-        if dataset_path and dataset_path.is_file():
-            dataset = load_yaml(dataset_path)
+        execution = evaluation.get("execution") or {}
+        for key in ("file",):
+            _portable_reference(eval_path.parent, execution.get(key), case_dir, f"execution.{key}", failures)
+        for raw in execution.get("sources", []):
+            _portable_reference(eval_path.parent, raw, case_dir, "execution.sources", failures)
+        if isinstance(raw_dataset, dict) or (dataset_path and dataset_path.is_file()):
+            dataset = raw_dataset if isinstance(raw_dataset, dict) else load_yaml(dataset_path)
+            dataset_path = dataset_path or eval_path
             _validate_asset_references(dataset.get("shared_assets"), dataset_path.parent, case_dir, "dataset.shared_assets", failures)
             for index, item in enumerate(dataset.get("items", [])):
                 if isinstance(item, dict):
@@ -164,8 +172,16 @@ def validate_portable(case_dir: Path) -> None:
 
 def pack_case(case_dir: Path, output_dir: Path | None = None, *, presentation_dir: Path | None = None) -> Path:
     case_dir = case_dir.resolve()
-    publication = load_publication(case_dir)
-    assert publication is not None
+    publication = load_publication(case_dir, required=False)
+    if publication is None:
+        case = load_yaml(case_dir / "case.yml")
+        publication = {
+            "schema_version": 1, "name": case["name"], "publisher": "local",
+            "version": "0.1.0", "title": case["title"], "summary": case["description"],
+            "authors": [{"name": "Local experiment"}], "license": "Unspecified",
+            "profile": "full", "tags": [],
+            "data_review": {"acknowledged": True, "note": "Local portable evidence archive; no publication requested."},
+        }
     validate_portable(case_dir)
     payload = collect_payload(case_dir, publication["profile"])
     scan_secrets({"publication.yml": _yaml_bytes(publication), **payload})
@@ -561,7 +577,7 @@ def _validate_package_manifest(manifest: Any) -> None:
     }
     if set(manifest) != expected_fields:
         raise TamesuError("package.yml has unrecognized or missing fields")
-    if manifest.get("schema_version") != 1:
+    if manifest.get("schema_version", 1) != 1:
         raise TamesuError("Unsupported package schema_version")
     if manifest.get("profile") not in PROFILES:
         raise TamesuError("package.yml contains an invalid profile")
@@ -649,7 +665,7 @@ def _validate_payload_manifests(
             "payload/publication.yml is forbidden; publication metadata belongs in package.yml"
         )
     case = _payload_yaml(payload, "case.yml", required=True)
-    if case.get("schema_version") != 1:
+    if case.get("schema_version", 1) != 1:
         raise TamesuError("payload/case.yml has an unsupported schema_version")
     if not isinstance(case.get("name"), str) or not ID_PATTERN.fullmatch(case["name"]):
         raise TamesuError("payload/case.yml has an invalid case name")
@@ -660,7 +676,7 @@ def _validate_payload_manifests(
         if filename not in {"dataset.yml", "eval.yml", "run.yml", "report.yml", "result.yml", "package-view.yml"}:
             continue
         manifest = _payload_yaml(payload, path, required=True)
-        if manifest.get("schema_version") != 1:
+        if manifest.get("schema_version", 1) != 1:
             raise TamesuError(f"payload/{path} has an unsupported schema_version")
     if profile == "report-only":
         view = _payload_yaml(payload, "package-view.yml", required=True)
@@ -672,19 +688,21 @@ def _validate_payload_manifests(
             continue
         evaluation = _payload_yaml(payload, path, required=True)
         base = PurePosixPath(path).parent
-        references: list[tuple[str, Any]] = [("dataset", evaluation.get("dataset"))]
+        references: list[tuple[str, Any]] = [] if isinstance(evaluation.get("dataset"), dict) else [("dataset", evaluation.get("dataset"))]
         if "output_schema" in evaluation:  # tasks without a response schema omit it
             references.append(("output_schema", evaluation["output_schema"]))
         execution = evaluation.get("execution")
         if isinstance(execution, dict):
-            references.append(("execution.file", execution.get("file")))
+            if execution.get("file"):
+                references.append(("execution.file", execution["file"]))
             for index, raw in enumerate(execution.get("sources") or []):
                 references.append((f"execution.sources[{index}]", raw))
         for index, arm in enumerate(evaluation.get("arms", [])):
             if not isinstance(arm, dict):
                 continue
             for role, raw in (arm.get("prompts") or {}).items():
-                references.append((f"arms[{index}].prompts.{role}", raw))
+                if not isinstance(raw, dict):
+                    references.append((f"arms[{index}].prompts.{role}", raw))
             for index2, raw in enumerate(arm.get("references", [])):
                 references.append((f"arms[{index}].references[{index2}]", raw))
         for label, raw in references:

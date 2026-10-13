@@ -349,7 +349,7 @@ class ImageProject:
                 },
             )
         )
-        self._stack.enter_context(patch("tamesu.runner.get_provider", return_value=self.provider))
+        self._stack.enter_context(patch("tamesu.inspect_tasks.get_provider", return_value=self.provider))
         self._stack.enter_context(patch("tamesu.providers.get_provider", return_value=self.provider))
         self._stack.enter_context(patch("tamesu.judging.get_provider", return_value=self.provider))
         self._stack.enter_context(patch("tamesu.judging.time.sleep"))

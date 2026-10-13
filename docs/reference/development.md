@@ -432,4 +432,4 @@ Before considering an implementation change complete:
 
 For the command behavior contributors are implementing, see the
 [Command-line interface](cli.md). The complete design rationale remains in the
-[Tamesu implementation plan](../plans/EVALUATION-FRAMEWORK-IMPLEMENTATION.md).
+[Tamesu implementation plan](../../plans/EVALUATION-FRAMEWORK-IMPLEMENTATION.md).

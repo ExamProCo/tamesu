@@ -22,7 +22,7 @@ from .models import EvalContext
 from .planner import build_plan
 from .present_blocks import sanitize_text
 from .present_facts import computed_facts
-from .providers import get_provider
+from .inspect_provider import get_provider
 from .providers.models import estimate_cost, registered
 from .reporting import build_evaluation_report
 from .tasks import task_for

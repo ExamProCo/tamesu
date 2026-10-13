@@ -6,7 +6,7 @@ review, accept, and promote the results with the same evidence guarantees as
 dataset, prompt, checks, artifact layout, and report run against any image-capable model.
 
 A runnable, low-cost walkthrough lives in
-[`examples/product-reference-images`](../examples/product-reference-images/README.md):
+[`examples/product-reference-images`](../../examples/product-reference-images/README.md):
 three invented products, two image models, a judge, and a review, for a few cents.
 
 ## Why images need more stages

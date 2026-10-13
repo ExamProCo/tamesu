@@ -1,9 +1,4 @@
-"""Execution backends: how a run's items are executed.
-
-A task decides what an output means (artifacts, scores, reports, review). A backend decides
-how the output is produced. `native` is Tamesu's per-item provider loop; `inspect` runs one
-frozen Inspect AI evaluation and ingests its log as Tamesu evidence.
-"""
+"""Inspect execution and the portable result ingestion contract."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -72,14 +67,10 @@ class Backend(Protocol):
 
 
 def backend_name(evaluation: dict[str, Any]) -> str:
-    return str((evaluation.get("execution") or {}).get("backend", "native"))
+    return str((evaluation.get("execution") or {}).get("backend", "inspect"))
 
 
 def get_backend(name: str) -> Backend:
-    if name == "native":
-        from .native import NativeBackend
-
-        return NativeBackend()
     if name == "inspect":
         from .inspect_backend import InspectBackend
 
@@ -91,4 +82,4 @@ def backend_for(evaluation: dict[str, Any]) -> Backend:
     return get_backend(backend_name(evaluation))
 
 
-SUPPORTED_BACKENDS = ("native", "inspect")
+SUPPORTED_BACKENDS = ("inspect",)

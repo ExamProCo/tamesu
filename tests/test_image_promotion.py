@@ -11,7 +11,7 @@ import yaml
 from image_fixtures import EVAL_ID, ImageProject
 from test_image_acceptance import BAD, GOOD, Harness
 
-from tamesu.cli import command_close, command_promote
+from tamesu.cli import command_promote
 from tamesu.config import _validate_dataset, load_eval_context, load_yaml
 from tamesu.errors import ExecutionError
 from tamesu.identity import digest_file
@@ -52,19 +52,14 @@ class PromotionTests(unittest.TestCase):
         judge_eval(self.harness.context)
         self.harness.review({GOOD: True, BAD: False})
 
-    def close(self) -> None:
-        command_close(self.root, EVAL_ID)
-
     def context(self):
         return load_eval_context(self.root, EVAL_ID)
 
-    def test_refuses_while_the_eval_is_not_closed(self) -> None:
-        with self.assertRaises(ExecutionError) as caught:
-            plan_promotion(self.context(), "product-scanning/product-scanning-v2")
-        self.assertIn("close it first", str(caught.exception))
+    def test_accepted_evidence_can_be_promoted_without_closing(self) -> None:
+        plan = plan_promotion(self.context(), "product-scanning/product-scanning-v2")
+        self.assertEqual(len(plan.promoted), 1)
 
     def test_bad_destinations(self) -> None:
-        self.close()
         for target, fragment in (
             ("nonsense", "--to must look like"),
             ("missing-case/x-v1", "Destination case does not exist"),
@@ -74,7 +69,6 @@ class PromotionTests(unittest.TestCase):
             self.assertIn(fragment, str(caught.exception))
 
     def test_dry_run_lists_copies_exclusions_and_products_without_an_accepted_image(self) -> None:
-        self.close()
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             command_promote(self.root, EVAL_ID, "product-scanning/product-scanning-v2", dry_run=True)
@@ -86,7 +80,6 @@ class PromotionTests(unittest.TestCase):
         self.assertFalse((self.root / "cases/product-scanning/datasets").exists())
 
     def test_promotion_writes_a_valid_new_dataset_with_provenance(self) -> None:
-        self.close()
         plan = plan_promotion(self.context(), "product-scanning/product-scanning-v2")
         execute_promotion(self.context(), plan)
         dataset_dir = self.root / "cases/product-scanning/datasets/product-scanning-v2"
@@ -115,7 +108,6 @@ class PromotionTests(unittest.TestCase):
         self.assertEqual(promotion["promoted"], [GOOD])
 
     def test_prior_dataset_versions_are_never_touched(self) -> None:
-        self.close()
         before = tree_digest(self.root / "cases/product-reference/datasets")
         plan = plan_promotion(self.context(), "product-scanning/product-scanning-v2")
         execute_promotion(self.context(), plan)
@@ -125,14 +117,12 @@ class PromotionTests(unittest.TestCase):
         self.assertIn("frozen", str(caught.exception))
 
     def test_accepted_image_modified_after_closing_blocks_promotion(self) -> None:
-        self.close()
         next((self.harness.run_dir / "items" / GOOD).glob("output-*")).write_bytes(b"tampered")
         with self.assertRaises(ExecutionError) as caught:
             plan_promotion(self.context(), "product-scanning/product-scanning-v2")
         self.assertIn("No accepted images to promote", str(caught.exception))  # stale image is rejected
 
     def test_failed_copy_leaves_no_partial_dataset_version(self) -> None:
-        self.close()
         plan = plan_promotion(self.context(), "product-scanning/product-scanning-v2")
         plan.copies[0][0].unlink()
         with self.assertRaises(OSError):
@@ -162,7 +152,7 @@ class SelectionTests(unittest.TestCase):
                 outcome.update({"pass": True, "reason_code": None})
         (out / "responses.yml").write_text(yaml.safe_dump(document, sort_keys=False))
         import_responses(context, out / "responses.yml")
-        command_close(project.root, EVAL_ID)
+
         return plan_promotion(load_eval_context(project.root, EVAL_ID), "product-scanning/product-scanning-v2")
 
     def test_selection_none_promotes_every_accepted_repetition(self) -> None:
@@ -197,7 +187,6 @@ class EndToEndTests(unittest.TestCase):
                 outcome.update({"pass": True, "reason_code": None})
         (out / "responses.yml").write_text(yaml.safe_dump(document, sort_keys=False))
         import_responses(context, out / "responses.yml")
-        self.assertEqual(command_close(project.root, EVAL_ID), 0)
         text = io.StringIO()
         with contextlib.redirect_stdout(text):
             command_promote(project.root, EVAL_ID, "product-scanning/product-scanning-v2", dry_run=True)

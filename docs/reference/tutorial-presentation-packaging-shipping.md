@@ -3,7 +3,7 @@
 > **Status:** This tutorial is runnable with Tamesu 0.1. It uses only stored evidence and
 > makes no paid provider calls.
 
-[Part 1](tutorial.md) ended with a completed eval, its run evidence, a leaderboard, and an
+[Part 1](../tutorial.md) ended with a completed eval, its run evidence, a leaderboard, and an
 evaluation report. This tutorial turns that case into three things:
 
 1. a static case study that a colleague can read in a browser;
@@ -12,7 +12,7 @@ evaluation report. This tutorial turns that case into three things:
    reviewed pull request.
 
 The tutorial continues to use the
-[support-ticket classification project](../examples/support-ticket-classification/).
+[support-ticket classification project](../../examples/support-ticket-classification).
 No server, database, provider credential, or JavaScript build tool is required.
 
 By the end, you will know how to:

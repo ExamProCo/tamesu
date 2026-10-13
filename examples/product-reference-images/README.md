@@ -1,7 +1,7 @@
 # Product reference images example
 
-A small Tamesu project for trying the [image eval workflow](../../docs/image-evals.md):
-generate, judge, review, close, and promote. It uses three invented products, so nothing
+A small Tamesu project for trying the [image eval workflow](../../docs/reference/image-evals.md):
+generate, judge, review, and promote. It uses three invented products, so nothing
 here involves a real brand.
 
 ## What this example is testing
@@ -48,7 +48,6 @@ cost is recorded exactly after each call. The `budget_usd` ceiling cannot be enf
 it ahead of time; expect cents.
 
 ```sh
-tamesu activate product-reference/baseline/two-model-baseline
 tamesu run product-reference/baseline/two-model-baseline --limit-items 1   # probe: 1 image per model
 ```
 
@@ -81,17 +80,15 @@ import it. Leave an image untouched to review it later. Then:
 ```sh
 tamesu status  product-reference/baseline/two-model-baseline   # owed work and stale evidence
 tamesu report  product-reference/baseline/two-model-baseline
-tamesu close   product-reference/baseline/two-model-baseline   # finish analysis.md first
 tamesu promote product-reference/baseline/two-model-baseline \
   --to product-reference/accepted-references-v1 --dry-run
 ```
 
-`close` refuses while reviews are missing (`--allow-incomplete-review` waives it and is
-recorded in `closing.yml`).
+Required human review remains visible as outstanding work until responses are imported.
 
 ## Present the results
 
-Once the eval is closed, render a static case study that shows the generated images next to
+Once results are available, render a static case study that shows the generated images next to
 their evidence:
 
 ```sh
@@ -103,8 +100,7 @@ The page lists each run with how many images were accepted. Open an item to see 
 the brief, and the mechanical, model-judge, and human results in separate columns. Images
 are copied into `build/present/product-reference/assets/images/`, so the folder is
 self-contained. `present` makes no provider calls and can be rebuilt at any time; add
-`tamesu pack product-reference` afterwards if you want a shareable archive (it needs a
-`publication.yml`; see the [packaging tutorial](../../docs/tutorial-presentation-packaging-shipping.md)).
+`tamesu pack product-reference` afterwards if you want a portable experiment and results archive; see the [tutorial](../../docs/tutorial.md).
 
 ## Write your conclusion
 
@@ -115,8 +111,9 @@ a draft as soon as there is a banked run, and keeps its "Evidence at a glance" s
 as you judge and review. Open it, replace the `TODO` lines in your own words, and say what the
 counts support and what three images and one reviewer cannot.
 
-`tamesu close` stamps the file so the page can say it matches the evidence. If you import
-another review afterwards, the page flags the analysis as out of date.
+Use `tamesu analyze <eval-id> --scaffold` for an authored template, or supply
+`--provider` and `--model` for model-assisted analysis. If you import
+another review afterwards, refresh your conclusion before sharing it.
 
 ## The reports
 

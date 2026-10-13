@@ -1,4 +1,4 @@
-"""Shared selection of stored image evidence that later stages (judging, review) may act on."""
+"""Select current stored artifacts for optional review and compatible image judging."""
 
 from __future__ import annotations
 
@@ -49,8 +49,8 @@ def resolve_run_dirs(context: EvalContext, run_id: str | None) -> list[Path]:
         if load_yaml(run_dir / "run.yml").get("eval_id") != context.eval_id:
             raise ExecutionError(f"Run {run_id} does not belong to {context.eval_id}.")
         return [run_dir]
-    plan = build_plan(context)
-    run_dirs = [context.eval_dir / "runs" / banked for banked in sorted(plan.banked_run_ids.values())]
+    run_dirs = [path.parent for path in sorted((context.eval_dir / "runs").glob("*/run.yml"))
+                if load_yaml(path).get("state") == "complete" and not load_yaml(path).get("probe", False)]
     if not run_dirs:
         raise ExecutionError("No banked runs found. Pass --run to act on a specific run.")
     return run_dirs
