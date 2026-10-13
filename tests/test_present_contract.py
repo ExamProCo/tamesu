@@ -251,9 +251,9 @@ class ResilienceTests(unittest.TestCase):
 
     def test_a_broken_case_yml_still_refuses(self) -> None:
         manifest = yaml.safe_load((self.fixture.case / "case.yml").read_text())
-        del manifest["technical_uncertainty"]
+        del manifest["current_problem"]
         write_yaml(self.fixture.case / "case.yml", manifest)
-        with self.assertRaisesRegex(TamesuError, "technical_uncertainty"):
+        with self.assertRaisesRegex(TamesuError, "current_problem"):
             present_case(self.fixture.case, self.fixture.root / "out")
 
 

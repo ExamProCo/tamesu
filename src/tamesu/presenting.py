@@ -222,10 +222,10 @@ def build_case_data(case_dir: Path, *, include_text_artifacts: bool = True) -> d
     if case_errors:  # a broken case.yml is not one eval's problem: refuse, with the reasons
         raise ConfigError("Validation failed for case.yml:\n" + "\n".join(f"- {e}" for e in case_errors))
     publication = load_publication(case_dir, required=False) or {
-        "name": case.get("name", case_dir.name),
+        "name": case_dir.name,
         "publisher": "unpublished",
         "version": "unpublished",
-        "title": case.get("title", case_dir.name),
+        "title": case.get("title") or case.get("name", case_dir.name),
         "summary": case.get("description", ""),
         "authors": [],
         "license": "not specified",
@@ -243,14 +243,30 @@ def build_case_data(case_dir: Path, *, include_text_artifacts: bool = True) -> d
     known_cost = 0.0
     cost_complete = True
 
+    for experiment_path in sorted(case_dir.glob('experiments/*/experiment.yml')):
+        try:
+            authored = load_yaml(experiment_path)
+        except TamesuError:
+            authored = {}
+        experiment_id = experiment_path.parent.name
+        experiments[experiment_id] = {
+            'id': experiment_id, 'title': authored.get('name') or experiment_id,
+            'description': authored.get('description', ''), 'hypothesis': authored.get('hypothesis', ''),
+            'success_criteria': authored.get('success_criteria', []),
+            'overview': _read_optional(experiment_path.parent / 'README.md'), 'evals': [],
+        }
     for eval_path in sorted(case_dir.glob("experiments/*/evals/*/eval.yml")):
         experiment_dir = eval_path.parents[2]
         experiment_id = experiment_dir.name
+        authored = load_yaml(experiment_dir / 'experiment.yml') if (experiment_dir / 'experiment.yml').is_file() else {}
         experiment = experiments.setdefault(
             experiment_id,
             {
                 "id": experiment_id,
-                "title": experiment_id.replace("-", " ").title(),
+                "title": authored.get("name") or experiment_id.replace("-", " ").title(),
+                "description": authored.get("description", ""),
+                "hypothesis": authored.get("hypothesis", ""),
+                "success_criteria": authored.get("success_criteria", []),
                 "overview": _read_optional(experiment_dir / "README.md"),
                 "evals": [],
             },
@@ -301,7 +317,7 @@ def build_case_data(case_dir: Path, *, include_text_artifacts: bool = True) -> d
         "schema_version": 1,
         "tamesu_version": __version__,
         "case": {
-            "name": case.get("name", case_dir.name),
+            "name": case_dir.name,
             "title": publication.get("title") or case.get("title"),
             "summary": publication.get("summary") or case.get("description"),
             "description": case.get("description", ""),
@@ -438,7 +454,7 @@ def _invalid_eval(eval_path: Path, exc: Exception, *, internal: bool = False) ->
         "leader": None,
         "coverage": {},
         "rows": [],
-        "dataset": {"name": None, "description": None, "items": None, "path": raw.get("dataset")},
+        "dataset": {"name": None, "description": None, "items": None, "path": "inline" if isinstance(raw.get("dataset"), dict) else raw.get("dataset")},
         "method": {
             "task": raw.get("task"),
             "arms": raw.get("arms") if isinstance(raw.get("arms"), list) else [],
@@ -945,6 +961,13 @@ def _short(value: Any, limit: int = 160) -> str:
 
 def _experiment_html(data: dict[str, Any], experiment: dict[str, Any]) -> str:
     sections: list[str] = []
+    if experiment.get('description'):
+        sections.append(f"<section><h2>Question and method</h2><p>{_e(experiment['description'])}</p></section>")
+    if experiment.get('hypothesis'):
+        sections.append(f"<section><h2>Hypothesis</h2><p>{_e(experiment['hypothesis'])}</p></section>")
+    if experiment.get('success_criteria'):
+        criteria = ''.join(f'<li>{_e(value)}</li>' for value in experiment['success_criteria'])
+        sections.append(f'<section><h2>Success criteria</h2><ul>{criteria}</ul><p>Authored criteria: assess these against the evidence below.</p></section>')
     for evaluation in experiment["evals"]:
         state = evaluation.get("lifecycle") or {}
         reason = f'<p class="muted">{_e(state.get("reason"))}</p>' if state.get("reason") else ""
@@ -1347,6 +1370,7 @@ def _copy_dataset_assets(case_dir: Path, destination: Path) -> None:
         raw_dataset = evaluation.get("dataset")
         if not isinstance(raw_dataset, str):
             continue
+        raw_dataset = raw_dataset.replace("{{ root.datasets }}", str(case_dir / "datasets"))
         dataset_path = (eval_path.parent / raw_dataset).resolve()
         if not dataset_path.is_file():
             continue

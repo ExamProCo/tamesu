@@ -389,3 +389,25 @@ Created for one dataset item?  → Run item
 
 For the meaning of each level, see [Core concepts](concepts.md). Manifest fields will be
 documented in the [Manifest reference](manifests.md).
+
+## Authored happy-path layout
+
+```text
+cases/base-calc/
+  case.yml
+  datasets/
+    integer-addition-v1/dataset.yml
+  experiments/add/
+    experiment.yml
+    evals/int/
+      eval.yml
+      task.py
+      analysis.md                 # authored or explicitly model-assisted
+      evaluation-report.md        # optional report export
+      runs/<run-id>/              # individual execution evidence and Inspect logs
+      statistics/<digest>.yml     # frozen Inspect comparison statistics
+```
+
+`case new` and `exp new` create `.keep` files in empty datasets, experiments, and evals
+directories. `exp new` writes YAML documentation; an existing experiment README is still
+shown when present. New evals always live under `evals/`.

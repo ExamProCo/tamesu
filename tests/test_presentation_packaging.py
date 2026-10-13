@@ -137,9 +137,9 @@ class PresentationPackagingTests(unittest.TestCase):
 
     def test_case_context_fields_are_required(self) -> None:
         manifest = yaml.safe_load((self.case / "case.yml").read_text())
-        del manifest["technical_uncertainty"]
+        del manifest["current_problem"]
         write_yaml(self.case / "case.yml", manifest)
-        with self.assertRaisesRegex(TamesuError, "case.technical_uncertainty"):
+        with self.assertRaisesRegex(TamesuError, "case.current_problem"):
             build_case_data(self.case)
 
     def test_analysis_is_bound_to_current_evidence(self) -> None:

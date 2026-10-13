@@ -21,7 +21,7 @@
     },
     "name": {
       "type": "string",
-      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"
     },
     "status": {
       "enum": [
@@ -209,7 +209,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+            "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"
           },
           "description": {
             "type": "string",
@@ -289,9 +289,7 @@
     "evaluation": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "mechanical"
-      ],
+      "required": [],
       "properties": {
         "mechanical": {
           "type": "array",
@@ -330,7 +328,7 @@
             "properties": {
               "id": {
                 "type": "string",
-                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"
               },
               "provider": {
                 "type": "string",
@@ -439,8 +437,52 @@
               ]
             }
           }
+        },
+        "scorers": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 1,
+                "additionalProperties": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                }
+              }
+            ]
+          }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "scorers"
+          ],
+          "not": {
+            "required": [
+              "mechanical"
+            ]
+          }
+        },
+        {
+          "required": [
+            "mechanical"
+          ],
+          "not": {
+            "required": [
+              "scorers"
+            ]
+          }
+        }
+      ]
     },
     "metrics": {
       "type": "object",

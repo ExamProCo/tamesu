@@ -12,7 +12,7 @@ Your goal is to design experiments and evaluations that measure the assistant's 
 
 > The key point is that Tamesu's documentation layer creates a consistent and easy way to explain evals and they from the business use-case down to the smallest to the individual evaluations that support the conclusions.
 
-## 1. Install Tamseu
+## 1. Install Tamesu
 
 Create a python env (optional)
 ```sh
@@ -38,7 +38,7 @@ Ideally this will be a top level git repo and very likely its main product's rep
 
 ```sh
 mkdir -p ~/Sites/orderwisp
-cd ~/oderwisp
+cd ~/Sites/orderwisp
 ```
 
 ## 1. Generate Cases, Experiments, and Evaluations
@@ -58,9 +58,9 @@ tamesu eval new base-calc/sub/simple
 tamesu eval new base-calc/sub/borrowing
 tamesu eval new base-calc/sub/multi_digit
 tamesu exp new base-calc/mult
-tamesu eval new base-calc/sub/simple
-tamesu eval new base-calc/sub/double_digit
-tamesu eval new base-calc/sub/multi_digit
+tamesu eval new base-calc/mult/simple
+tamesu eval new base-calc/mult/double_digit
+tamesu eval new base-calc/mult/multi_digit
 ```
 
 > Consider at this stage I have thought up possible evals without walking the docs. Remembr this as a process error.
@@ -106,7 +106,7 @@ and acceptance rules. `task.py` is the Inspect task that generates and scores an
 At anytime we can preview our case in the web-browser
 
 ```sh
-tamseu show
+tamesu show
 ```
 
 This will serve a simple http-server.
@@ -144,7 +144,7 @@ success_criteria:
   - Each test case must pass 30 consecutive runs without errors.
   - At least 100 unique calculations must be tested.
   - We must test it against our range of effort from minimal to high.
-  - All 3,000 executions must produce correct results.
+  - All 12,000 executions (3,000 per effort arm) must produce correct results.
   - All responses must follow the expected output format.
   - No incorrect, fabricated, or invalid answers are acceptable.
 ```
@@ -175,7 +175,7 @@ So we need determine what evals we need. You can use a coding harness now to sug
 - multi-value-addition	Adding three or more numbers
 - contextual-addition	Understanding addition requests written in natural language, including irrelevant information
 
-> Use the tamseu agent skill, so that it has full context of tasemuse configuration, for example it needs to know that eval's have arms so it doesn't create a ton of evals for eval variation.
+> Use the tamesu agent skill, so that it has full context of tamesu configuration, for example it needs to know that eval's have arms so it doesn't create a ton of evals for eval variation.
 
 So we in theory need to create this many evals.
 
@@ -197,8 +197,8 @@ tamesu eval new base-calc/add/int
 
 
 ```sh
-cases/base-calc/experiments/add/int/eval.yml
-cases/base-calc/experiments/add/int/task.py
+cases/base-calc/experiments/add/evals/int/eval.yml
+cases/base-calc/experiments/add/evals/int/task.py
 ```
 
 The `task.py` is what will get executed, tamesu is tightly coupled with Inspect AI, we will visit this in a moment buet lets focus on the `eval.yml`
@@ -260,9 +260,9 @@ runs:
     provider: "[todo]"
     arms: [baseline]
 evaluation:
-  mechanical: [correctness]
+  scorers: [correctness]
 metrics:
-  primary: mean_score:correctness
+  primary: correctness/accuracy
 ```
 
 So using AI coding harness we have it generate our eval:
@@ -376,7 +376,7 @@ metrics:
 - Notice our dataset is too small, we are suppose to have 100 unique examples, we'll need an external dataset.
 
 ```yml
-dataset: "{{ root.datasets }}/integer-addition-v1.yml"
+dataset: "{{ root.datasets }}/integer-addition-v1/dataset.yml"
 ```
 
 The following path `./cases/base-calc/datasets/integer-addition-v1/dataset.yml`:

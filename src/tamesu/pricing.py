@@ -46,7 +46,10 @@ def estimate_plan_cost(plan: Plan, specs: tuple[RunSpec, ...] | None = None) -> 
             spec_estimated += per_call[0]
             spec_maximum += per_call[1] * attempts
         else:
-            estimated += spec_estimated
+            limit = plan.context.evaluation.get('execution', {}).get('limits', {}).get('cost_limit')
+            if limit is not None:
+                spec_maximum = min(spec_maximum, float(limit))
+            estimated += min(spec_estimated, spec_maximum)
             maximum += spec_maximum
 
     return PlanCost(

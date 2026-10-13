@@ -42,14 +42,15 @@ of an existing field does.
 
 ### IDs and names
 
-Machine-readable identifiers use lowercase kebab-case:
+Directory and item identifiers use lowercase words separated by hyphens or underscores:
 
 ```text
-^[a-z0-9]+(?:-[a-z0-9]+)*$
+^[a-z0-9]+(?:[-_][a-z0-9]+)*$
 ```
 
-This applies to case, dataset, experiment, eval, arm, metric, and item IDs. Display titles
-and descriptions may use normal prose.
+This applies to case directory IDs, datasets, experiments, evals, arms, and items.
+Case `name` is display text. Inspect metrics use scorer/metric references such as
+`correctness/accuracy`; display names and descriptions may use normal prose.
 
 IDs are stable. Renaming an item or arm creates a different identity even when its content
 is otherwise unchanged.
@@ -113,12 +114,12 @@ default_task: image_generation
 | Field | Type | Required | Description |
 |---|---|---:|---|
 | `schema_version` | integer | Yes | Must be `1` |
-| `name` | string | Yes | Stable kebab-case case ID; must match the directory name |
-| `title` | string | Yes | Human-readable case title |
+| `name` | string | Yes | Human-readable name; stable ID comes from the directory |
+| `title` | string | No | Optional title for legacy case manifests |
 | `description` | string | Yes | Concise description of what the case evaluates |
 | `business_use` | string | Yes | How the evaluated capability would be used in practice |
 | `current_problem` | string | Yes | Present pain or limitation that motivates the work |
-| `technical_uncertainty` | string | Yes | Unknown that the case's experiments are intended to resolve |
+| `technical_uncertainty` | string | No | Unknown that the case's experiments are intended to resolve |
 | `default_task` | string | No | Task adapter used when an eval does not specify `task` |
 
 These narrative fields are separate so presentations can explain the case without
@@ -315,20 +316,8 @@ metrics:
 | `dataset` | path | Yes | Path to one `dataset.yml` |
 | `output_schema` | path | Task-dependent | Schema used to validate structured task output |
 
-Status controls execution:
-
-| Status | Meaning | Paid execution allowed? |
-|---|---|---:|
-| `draft` | The plan may still change | No |
-| `active` | The plan is approved for execution | Yes |
-| `complete` | The eval is closed to new runs | No |
-
-All statuses allow read-only linting, planning, status, comparison, and reporting. Reopening
-a complete eval requires an explicit version-controlled edit.
-
-Use `tamesu activate <case>/<experiment>/<eval>` to validate and move a draft eval to
-active without calling a provider. Use `tamesu close` to verify its evidence, move an
-active eval to complete, and rebuild its leaderboard.
+Legacy `status` values remain readable but do not gate execution. Completion is derived
+from evidence. No `activate` or `close` command is required.
 
 ### `defaults`
 
@@ -734,3 +723,39 @@ package digest, avoiding circular identity.
 The normative fields, inclusion rules, canonicalization algorithm, and consumer safety
 limits are documented in [Case packages](packages.md). Machine-readable definitions are
 in `schemas/publication.schema.json` and `schemas/package.schema.json`.
+
+## Authored experiment YAML and Inspect metrics
+
+`experiment.yml` is beside the experiment's `evals/` directory:
+
+```yaml
+name: Basic Addition
+description: Can Orderwisp add integers at every tested effort level?
+hypothesis: Modern models will return exact results at every effort level.
+success_criteria:
+  - Test at least 100 unique calculations.
+  - Every calculation must pass 30 repetitions for each effort arm.
+```
+
+Success criteria are authored prose for assessment against evidence, not executable rules.
+Execution acceptance rules continue to use the existing acceptance policy.
+
+External datasets can use the current case's datasets directory:
+
+```yaml
+dataset: "{{ root.datasets }}/integer-addition-v1/dataset.yml"
+```
+
+Inline datasets remain supported. Custom Inspect tasks declare scorer names and metric references:
+
+```yaml
+evaluation:
+  scorers: [correctness]
+metrics:
+  primary: correctness/accuracy
+```
+
+`correctness` names a scorer implemented in `task.py`. Inspect computes its metrics and
+repetition reductions; Tamesu freezes those statistics for offline comparison and reporting.
+Historical `evaluation.mechanical` and `mean_score:<scorer>` metrics remain readable.
+Using both `scorers` and `mechanical` in one evaluation is an error.

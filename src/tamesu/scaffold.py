@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .errors import TamesuError
 
-NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 
 CASE = """\
 name: {case}
@@ -21,26 +21,14 @@ technical_uncertainty: >
   What you cannot answer without running an experiment.
 """
 
-EXPERIMENT_README = """\
-# {title}
-
-## Uncertainty
-
-What this experiment is trying to find out, and why it is not obvious.
-
-## Method
-
-What is compared, what is held fixed, and how results are scored.
-
-## Findings
-
-Fill this in after the runs. Link to the page from `tamesu show`.
-
-## Limits
-
-What these results do not show.
-
-## Next steps
+EXPERIMENT = """\
+name: {title}
+description: >
+  What question does this experiment set out to answer?
+hypothesis: >
+  What do you expect to happen, and why?
+success_criteria:
+  - Describe the evidence needed for a successful outcome.
 """
 
 def create(project_root: Path, level: str, path: str) -> list[Path]:
@@ -55,11 +43,12 @@ def create(project_root: Path, level: str, path: str) -> list[Path]:
             raise TamesuError(f"Names must be lowercase-kebab-case: {part!r}")
     case, experiment, evaluation = (parts + [None, None])[:3]
     case_dir = project_root / "cases" / case
-    files: dict[Path, str] = {case_dir / "case.yml": CASE.format(case=case, title=_title(case))}
+    files: dict[Path, str] = {case_dir / "case.yml": CASE.format(case=case, title=_title(case)),
+        case_dir / "experiments/.keep": "", case_dir / "datasets/.keep": ""}
     if experiment:
         experiment_dir = case_dir / "experiments" / experiment
-        if not evaluation:
-            files[experiment_dir / "README.md"] = EXPERIMENT_README.format(title=_title(experiment))
+        files[experiment_dir / "experiment.yml"] = EXPERIMENT.format(title=_title(experiment))
+        files[experiment_dir / "evals/.keep"] = ""
     if evaluation:
         eval_dir = experiment_dir / "evals" / evaluation
         files[eval_dir / "eval.yml"] = INSPECT_EVAL.format(eval=evaluation, case=case)
@@ -107,7 +96,7 @@ defaults:
   repetitions: 1
   concurrency: 1
   timeout_seconds: 120
-  retries: 1
+  retries: 0
   budget_usd: 0.50
   parameters: {{max_tokens: 1024}}
 arms:
@@ -121,9 +110,9 @@ runs:
     provider: meta
     arms: [baseline]
 evaluation:
-  mechanical: [correctness]
+  scorers: [correctness]
 metrics:
-  primary: mean_score:correctness
+  primary: correctness/accuracy
 """
 
 INSPECT_TASK = '''from inspect_ai import Task, task

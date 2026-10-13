@@ -8,7 +8,7 @@ import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .artifacts import write_json
 from .config import load_eval_context, load_yaml
@@ -54,6 +54,7 @@ def live_state(case_dir: Path) -> dict:
                 runs.append({
                     'id': manifest.get('run_id', manifest_path.parent.name),
                     'state': manifest.get('state'),
+                    'probe': bool(manifest.get('probe')),
                     'model': manifest.get('resolved', {}).get('model'),
                     'arm': manifest.get('resolved', {}).get('arm'),
                     'selected': len(manifest.get('selection', {}).get('item_ids', [])),
@@ -73,7 +74,18 @@ def live_state(case_dir: Path) -> dict:
             errors.append(f'{eval_id}: {exc}')
             review, question = None, eval_id
         evaluations.append({'id': eval_id, 'question': question, 'runs': runs, 'review': review})
-    return {'schema_version': 1, 'case': case_dir.name, 'evaluations': evaluations, 'errors': errors}
+    documentation = {}
+    experiments = []
+    try:
+        documentation = load_yaml(case_dir / 'case.yml')
+    except TamesuError as exc:
+        errors.append(str(exc))
+    for path in sorted(case_dir.glob('experiments/*/experiment.yml')):
+        try:
+            experiments.append(dict(load_yaml(path), id=path.parent.name))
+        except TamesuError as exc:
+            errors.append(str(exc))
+    return {'schema_version': 1, 'case': case_dir.name, 'documentation': documentation, 'experiments': experiments, 'evaluations': evaluations, 'errors': errors}
 
 
 PAGE = r'''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -82,7 +94,7 @@ PAGE = r'''<!doctype html><meta charset="utf-8"><meta name="viewport" content="w
 <h1>Experiment overview</h1><p><a href="/index.html">Full results and narrative</a> · <a href="/api/state">Live JSON</a> · <a href="/data.json">Presentation JSON</a></p>
 <p id="status" role="status">Connecting…</p>
 <p>Completed items have finished generating; acceptance depends on their scores and any required review. Costs are recorded as items finish, not streamed from the billing provider.</p>
-<main id="main"></main><pre id="errors" class="error"></pre>
+<p><a href="/edit">Edit documentation</a></p><main id="main"></main><pre id="errors" class="error"></pre>
 <script>
 const TOKEN = __TOKEN__;
 const main = document.getElementById('main');
@@ -101,6 +113,13 @@ async function refresh(){
     const data=await response.json(), serialized=JSON.stringify(data);
     if(serialized!==last){
       last=serialized; main.replaceChildren();
+      const documentation=data.documentation||{};
+      main.append(el('h2',documentation.title||documentation.name||data.case));
+      for(const key of ['description','business_use','current_problem','technical_uncertainty'])if(documentation[key])main.append(el('h3',key.replaceAll('_',' ')),el('p',documentation[key]));
+      for(const experiment of data.experiments||[]){
+        const section=el('section');section.append(el('h2',experiment.name||experiment.id),el('p',experiment.description),el('h3','Hypothesis'),el('p',experiment.hypothesis),el('h3','Success criteria'));
+        const criteria=el('ul');for(const value of experiment.success_criteria||[])criteria.append(el('li',value));section.append(criteria);main.append(section);
+      }
       for(const evaluation of data.evaluations){
         const article=el('article');article.append(el('h2',evaluation.question),el('p',evaluation.id));
         if(evaluation.review){
@@ -110,7 +129,7 @@ async function refresh(){
         if(!evaluation.runs.length)article.append(el('p','Ready to run from your terminal. No stored results yet.'));
         const table=el('table'),head=el('tr');for(const h of ['Model / arm','Run status','Items completed','Recorded cost','Evidence'])head.append(el('th',h));table.append(head);
         for(const run of evaluation.runs){
-          const row=el('tr');row.append(el('td',`${run.model} / ${run.arm}`),el('td',run.state),el('td',`${run.completed} / ${run.selected} · ${run.failed} failed`),el('td',`$${run.cost_usd.toFixed(6)}${run.unknown_cost_items?' + unknown':''}`));
+          const row=el('tr');row.append(el('td',`${run.model} / ${run.arm}${run.probe?' · probe (excluded from comparisons)':''}`),el('td',run.state),el('td',`${run.completed} / ${run.selected} · ${run.failed} failed`),el('td',`$${run.cost_usd.toFixed(6)}${run.unknown_cost_items?' + unknown':''}`));
           const cell=el('td'),details=el('details');details.append(el('summary',`${run.id} — answers and checks`));
           for(const item of run.items)details.append(el('h4',`${item.id} · ${item.state}`),el('pre',JSON.stringify(item.scores,null,2)),el('p',item.error||''));
           cell.append(details);row.append(cell);table.append(row);
@@ -165,6 +184,18 @@ def serve_live(directory: Path, port: int, case_dir: Path) -> ThreadingHTTPServe
                 self.reply(403, {'error': 'Use the localhost address printed by Tamesu.'})
                 return
             route = urlsplit(self.path).path
+            if route == '/api/document':
+                from .documentation import read_document
+                try:
+                    ref = parse_qs(urlsplit(self.path).query).get('path', [''])[0]
+                    self.reply(200, read_document(root, ref))
+                except TamesuError as exc:
+                    self.reply(400, {'error': str(exc)})
+                return
+            if route == '/edit':
+                paths = [path.relative_to(root).as_posix() for pattern in ('case.yml', 'experiments/*/experiment.yml', 'experiments/*/evals/*/eval.yml') for path in case_dir.glob(pattern)]
+                self.reply(200, editor_page(paths, token), 'text/html')
+                return
             if route == '/api/state':
                 self.reply(200, live_state(case_dir))
                 return
@@ -220,7 +251,10 @@ def serve_live(directory: Path, port: int, case_dir: Path) -> ThreadingHTTPServe
                 if not isinstance(body, dict):
                     raise ValueError('Expected a JSON object')
                 with lock:
-                    if self.path == '/api/review/export':
+                    if self.path == '/api/document/save':
+                        from .documentation import save_document
+                        self.reply(200, save_document(root, body.get('path'), body.get('revision'), body.get('fields')))
+                    elif self.path == '/api/review/export':
                         eval_id = body.get('eval_id')
                         allowed = {e['id'] for e in live_state(case_dir)['evaluations']}
                         if not isinstance(eval_id, str) or eval_id not in allowed:
@@ -252,5 +286,88 @@ def serve_live(directory: Path, port: int, case_dir: Path) -> ThreadingHTTPServe
         temporary.cleanup()
         raise TamesuError(f'Cannot serve on port {port}; choose another --port.') from exc
     server.review_temporary = temporary
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def editor_page(paths: list[str], token: str) -> str:
+    import html
+    options = ''.join(f'<option>{html.escape(path)}</option>' for path in paths)
+    return '''<!doctype html><meta charset="utf-8"><title>Edit documentation</title>
+<style>body{font:16px system-ui;max-width:900px;margin:2rem auto}label{display:block;margin:1rem 0}textarea{display:block;width:100%;min-height:5rem;font:inherit}button,select{font:inherit;padding:.5rem}</style>
+<a href="/">← Cases and results</a><h1>Edit documentation</h1>
+<select id="documents">''' + options + '''</select><button id="reload">Reload</button>
+<form id="editor"></form><button id="save">Save</button><p id="status" role="status"></p>
+<script>
+const TOKEN=''' + json.dumps(token) + ''';
+let current;const editor=document.getElementById('editor'),status=document.getElementById('status');
+async function load(){try{const r=await fetch('/api/document?path='+encodeURIComponent(document.getElementById('documents').value));current=await r.json();if(!r.ok)throw Error(current.error);editor.replaceChildren();for(const [key,value] of Object.entries(current.fields)){const label=document.createElement('label');label.textContent=key;const input=document.createElement('textarea');input.name=key;input.value=Array.isArray(value)?value.join('\\n'):value;label.append(input);editor.append(label);}status.textContent='Loaded';}catch(e){status.textContent=e.message;}}
+document.getElementById('reload').onclick=load;document.getElementById('documents').onchange=load;
+document.getElementById('save').onclick=async()=>{try{const fields={};for(const input of editor.querySelectorAll('textarea'))fields[input.name]=input.name==='success_criteria'?input.value.split('\\n').filter(x=>x.trim()):input.value;const r=await fetch('/api/document/save',{method:'POST',headers:{'Content-Type':'application/json','X-Tamesu-Token':TOKEN},body:JSON.stringify({path:current.path,revision:current.revision,fields})});const data=await r.json();if(!r.ok)throw Error(data.error);current=data;status.textContent='Saved';}catch(e){status.textContent=e.message;}};
+load();</script>'''
+
+
+def serve_project(root: Path, port: int) -> ThreadingHTTPServer:
+    """Project index, with each case retaining the existing live/review server."""
+    import html
+    children = {}
+    watchers = []
+    lock = threading.Lock()
+
+    class Handler(SimpleHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_GET(self):
+            if self.headers.get('Host') not in {f'localhost:{self.server.server_address[1]}', f'127.0.0.1:{self.server.server_address[1]}'}:
+                self.send_error(403)
+                return
+            route = urlsplit(self.path).path
+            if route.startswith('/cases/'):
+                name = unquote(route[len('/cases/'):]).strip('/')
+                cases = {path.parent.name: path.parent for path in root.glob('cases/*/case.yml')}
+                if name not in cases:
+                    self.send_error(404)
+                    return
+                with lock:
+                    if name not in children:
+                        from .presenting import present_case
+                        from .present_watch import watch
+                        case = cases[name]
+                        server = serve_live(present_case(case), 0, case)
+                        stop = threading.Event()
+                        def render(case=case):
+                            return present_case(case)
+                        watcher = threading.Thread(target=watch, args=(case, render), kwargs={"stop": stop}, daemon=True)
+                        watcher.start()
+                        watchers.append((stop, watcher))
+                        children[name] = server
+                    server = children[name]
+                self.send_response(302)
+                self.send_header('Location', f'http://localhost:{server.server_address[1]}/')
+                self.end_headers()
+                return
+            if route != '/':
+                self.send_error(404)
+                return
+            links = []
+            for path in sorted(root.glob('cases/*/case.yml')):
+                try:
+                    case = load_yaml(path)
+                    label = case.get('title') or case.get('name') or path.parent.name
+                    description = case.get('description', '')
+                except TamesuError:
+                    label, description = path.parent.name, 'Invalid case document'
+                links.append(f'<article><h2><a href="/cases/{html.escape(path.parent.name, quote=True)}">{html.escape(str(label))}</a></h2><p>{html.escape(str(description))}</p></article>')
+            body = ('<!doctype html><meta charset="utf-8"><title>Tamesu cases</title><style>body{font:16px system-ui;max-width:1000px;margin:2rem auto}</style><h1>Cases</h1>' + ''.join(links) + '<script>setTimeout(()=>location.reload(),5000)</script>').encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    server.case_servers = children
+    server.case_watchers = watchers
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

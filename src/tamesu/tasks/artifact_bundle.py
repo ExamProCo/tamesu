@@ -56,7 +56,7 @@ class _Metrics(frozenset):
     def __contains__(self, item: object) -> bool:  # type: ignore[override]
         if super().__contains__(item):
             return True
-        return isinstance(item, str) and item.split(":", 1)[0] in PARAMETERIZED_METRICS
+        return isinstance(item, str) and (item.split(":", 1)[0] in PARAMETERIZED_METRICS or ("/" in item and all(item.split("/"))))
 
 
 class ArtifactBundleTask:
@@ -270,6 +270,9 @@ class ArtifactBundleTask:
                     "cost_per_accepted_usd": shared["cost_per_accepted_usd"],
                 }
             )
+        inspect_metrics_path = run_dir / "inspect/metrics.yml"
+        if inspect_metrics_path.is_file():
+            metrics.update(load_yaml(inspect_metrics_path).get("metrics", {}))
         requested = [context.evaluation["metrics"]["primary"], *context.evaluation["metrics"].get("secondary", [])]
         report = {
             "schema_version": 1,

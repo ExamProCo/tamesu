@@ -68,10 +68,10 @@ class PortableWorkflowTests(unittest.TestCase):
         return pack/'responses.yml'
 
     def test_starter_runs_and_roundtrips_without_publication_metadata(self):
-        self.assertEqual(len(self.files),3)
+        self.assertEqual(len(self.files),7)
         ids = self.execute(); self.assertEqual(len(ids),1)
         report = load_yaml(self.eval_dir/'runs'/ids[0]/'report.yml')
-        self.assertEqual(report['metrics']['mean_score:correctness'],1.0)
+        self.assertEqual(report['metrics']['correctness/accuracy'],1.0)
         view = self.root/'view'; present_case(self.case,view)
         archive = pack_case(self.case,self.root/'packages',presentation_dir=view)
         verified=verify_archive(archive)
@@ -86,7 +86,7 @@ class PortableWorkflowTests(unittest.TestCase):
     def test_wrong_answer_fails_correctness_even_when_text_is_valid(self):
         ids=self.execute('Please provide the question.')
         report=load_yaml(self.eval_dir/'runs'/ids[0]/'report.yml')
-        self.assertEqual(report['metrics']['mean_score:correctness'],0.0)
+        self.assertEqual(report['metrics']['correctness/accuracy'],0.0)
 
     def test_legacy_draft_and_complete_labels_never_block_execution(self):
         for status in ('draft','complete'):

@@ -128,6 +128,20 @@ def comparison_rows(plan: Plan) -> list[dict[str, Any]]:
                 if _is_number(report.get("metrics", {}).get(metric))
             ]
             metric_means[metric] = statistics.mean(values) if values else None
+        inspect_values = {}
+        if any('/' in metric for metric in requested_metrics):
+            from .inspect_metrics import aggregate_path
+            statistics_path = aggregate_path(plan.context.eval_dir, [report['run_id'] for report in reports])
+            if statistics_path.is_file():
+                inspect_values = load_yaml(statistics_path).get('metrics', {})
+            elif len(reports) == 1:
+                inspect_values = reports[0].get('metrics', {})
+            else:
+                from .errors import ExecutionError
+                raise ExecutionError('Frozen Inspect statistics are missing for this comparison; resume the pending run or execute the remaining plan to rebuild them.')
+            for metric in requested_metrics:
+                if '/' in metric:
+                    metric_means[metric] = inspect_values.get(metric)
         rows.append(
             {
                 "model": model,
@@ -137,8 +151,8 @@ def comparison_rows(plan: Plan) -> list[dict[str, Any]]:
                 "completed_items": completed_items,
                 "failed_items": failed_items,
                 "primary_metric": primary,
-                "primary_mean": statistics.mean(primary_values) if primary_values else None,
-                "primary_stdev": (
+                "primary_mean": metric_means.get(primary),
+                "primary_stdev": (None if "/" in primary else
                     statistics.pstdev(primary_values) if len(primary_values) > 1 else 0.0
                 )
                 if primary_values
@@ -172,7 +186,7 @@ def build_leaderboard(plan: Plan) -> Path:
         f"- Status: `{lifecycle_for(plan.context, plan, status_summary(plan)['counts']).state}`",
         f"- Primary metric: `{primary}`",
         f"- Generated: `{_utc_now()}`",
-        f"- Scorer: `tamesu {__version__}`",
+        f"- Execution and scoring: Inspect; reporting: `tamesu {__version__}`",
         "",
         "| Model | Arm | Repetitions | Items | Primary mean | Std. dev. | Failure rate | Cost (USD) |",
         "|---|---|---:|---:|---:|---:|---:|---:|",
@@ -234,12 +248,19 @@ def build_evaluation_report(plan: Plan) -> Path:
         f"- State: {_state_line(plan, counts)}",
         f"- Primary metric: `{primary}`",
         f"- Generated: `{_utc_now()}`",
-        f"- Scorer: `tamesu {__version__}`",
+        f"- Execution and scoring: Inspect; reporting: `tamesu {__version__}`",
         "",
         "## What happened",
         "",
     ]
 
+    from .config import load_yaml
+    experiment_path = plan.context.experiment_dir / 'experiment.yml'
+    documentation = ["## Business context", "", plan.context.case['description'], "", plan.context.case['business_use'], "", plan.context.case['current_problem'], ""]
+    if experiment_path.is_file():
+        experiment = load_yaml(experiment_path)
+        documentation.extend(["## Experiment", "", experiment['description'], "", "### Hypothesis", "", experiment['hypothesis'], "", "### Success criteria", "", *['- ' + criterion for criterion in experiment['success_criteria']], "", "These authored criteria require assessment against the evidence; execution completion alone does not establish success.", ""])
+    lines[4:4] = documentation
     if counts["owed"]:
         lines.append(
             f"The eval is incomplete: {counts['banked']} of {counts['planned']} planned "

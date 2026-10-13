@@ -27,7 +27,7 @@ from ..tasks import task_for
 from ..providers.models import PROVIDER_KEYS, estimate_cost, registered
 from . import BackendRun
 
-ADAPTER_VERSION = 1
+ADAPTER_VERSION = 2
 INSPECT_SPEC = ">=0.3.277,<0.4"
 DEFAULT_MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 MAX_ARTIFACTS_PER_ITEM = 200
@@ -252,7 +252,7 @@ def _source_like_files(directory: Path) -> list[Path]:
     found: list[Path] = []
     for path in sorted(directory.rglob("*")):
         relative = path.relative_to(directory)
-        if any(part.startswith(".") or part in {"staging", "__pycache__", "runs", "logs", "review", "rubrics", "build"} for part in relative.parts):
+        if any(part.startswith(".") or part in {"staging", "__pycache__", "runs", "logs", "review", "rubrics", "build", "statistics"} for part in relative.parts):
             continue
         if not path.is_file() or path.name in {"eval.yml", "dataset.yml", "case.yml", "rubric.yml"}:
             continue
@@ -469,6 +469,10 @@ class InspectBackend:
             inspect_version=installed_inspect_version(),
         )
         self._ingest(run, log, pending, staging, relative)
+        if any('/' in name for name in [context.evaluation['metrics']['primary'], *context.evaluation['metrics'].get('secondary', [])]):
+            from ..inspect_metrics import freeze_statistics
+            metrics = freeze_statistics(context, [run.run_id])
+            write_yaml(inspect_dir / 'metrics.yml', {'metrics': metrics})
 
     def _freeze_dataset(self, run: BackendRun, inspect_dir: Path) -> Path:
         samples = frozen_samples(run.context, run.spec.prompts, run.selected)
@@ -496,6 +500,8 @@ class InspectBackend:
         context, spec = run.context, run.spec
         block = execution_block(context.evaluation)
         limits = dict(block.get("limits", {}))
+        if block.get("file") or "cost_limit" in limits:
+            limits["cost_limit"] = min(limits.get("cost_limit", spec.budget_usd), spec.budget_usd)
         builtin = not block.get("file")
         if builtin:
             from ..inspect_tasks import builtin_task, image_model

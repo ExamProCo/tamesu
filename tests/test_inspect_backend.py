@@ -281,12 +281,12 @@ class IdentityAndPlanningTests(unittest.TestCase):
         self.fixture.write_eval({"execution": block})
         self.assertNotEqual(before.specification_fingerprint, self.spec().specification_fingerprint)
 
-    def test_budget_exposure_is_the_finite_cost_limit_per_item(self) -> None:
+    def test_budget_exposure_is_the_finite_cost_limit_per_inspect_invocation(self) -> None:
         from tamesu.pricing import estimate_plan_cost
 
         cost = estimate_plan_cost(build_plan(self.fixture.context()))
         self.assertTrue(cost.fully_priced)
-        self.assertEqual(cost.maximum_usd, 1.5)  # 3 items x $0.50, one attempt each
+        self.assertEqual(cost.maximum_usd, 0.5)  # Inspect shares its limit across all three samples
 
     def test_frozen_samples_preserve_item_ids_and_rendered_prompts(self) -> None:
         context = self.fixture.context()

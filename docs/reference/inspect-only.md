@@ -53,3 +53,18 @@ turn historical results into new evidence.
 
 Automated model grading should use [Inspect scorers](https://inspect.aisi.org.uk/model-graded.html).
 The existing image judge and model-assisted analysis utilities retain their review records and call Inspect model APIs for transport.
+
+## Authored happy path
+
+The primary commands are `case new`, `exp new`, and `eval new`. Experiments have
+`experiment.yml` with description, hypothesis, and success criteria. `show` lists cases
+and offers authored documentation editing; it also retains live evidence and review.
+
+Custom tasks use `evaluation.scorers` and metric references such as `correctness/accuracy`.
+Execution still saves separate resumable repetitions. Tamesu pools the saved sample scores
+and asks Inspect to apply the task's repetition reducer and metrics, freezing the results
+under the eval's `statistics/` directory. Rendering reads these statistics without importing
+task code. It does not average custom metrics from separate repetitions.
+
+Run filters and sampling share one plan with `run --dry-run`. Random probes persist their
+seed, selected IDs, and overrides for resume and remain excluded from final comparisons.

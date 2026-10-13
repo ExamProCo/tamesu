@@ -13,15 +13,15 @@ cost boundary, and lifecycle are clear before paid execution.
 Find the Tamesu project root containing `cases/`. Inspect nearby cases before introducing
 new conventions. Read the repository's Tamesu documentation when available, especially:
 
-- `docs/concepts.md` for Case → Experiment → Eval → Run;
-- `docs/file-structure.md` for placement and ownership;
-- `docs/manifests.md` for the current schema;
-- `docs/providers.md` and `docs/configuration.md` for model and credential constraints.
+- `docs/reference/concepts.md` for Case → Experiment → Eval → Run;
+- `docs/reference/file-structure.md` for placement and ownership;
+- `docs/reference/manifests.md` for the current schema;
+- `docs/reference/providers.md` and `docs/reference/configuration.md` for model and credential constraints.
 
 Treat those project-local documents and `tamesu lint` as authoritative over examples in
 this skill. If the project has no existing Tamesu pattern or local docs, read
 [the structured-text authoring reference](references/structured-text.md). For image
-generation evals, read `docs/image-evals.md` and follow
+generation evals, read `docs/reference/image-evals.md` and follow
 [the image-generation authoring reference](references/image-generation.md).
 
 ## Author the evaluation contract
@@ -37,31 +37,45 @@ text, define representative dataset inputs and expected outputs, a strict output
 prompt files, deterministic scorers where possible, one primary metric, and useful
 diagnostic metrics.
 
-Keep the eval at `status: draft` while authoring. Never place API keys, tokens, customer
-secrets, or signed URLs in manifests, prompts, fixtures, or committed `.env` files.
-
-## Validate before activation
-
-Run these read-only checks from the project root:
+Create the case first, describe the business use and current problem yourself, then
+create an experiment with a question, hypothesis, and success criteria. Create evals
+only after deciding what evidence the experiment requires:
 
 ```sh
-tamesu lint <case-or-eval-path>
+tamesu case new <case>
+tamesu exp new <case>/<experiment>
+tamesu eval new <case>/<experiment>/<eval>
+```
+
+Read `case.yml` and `experiment.yml` before proposing evals. Use arms for prompt or model
+parameter variations rather than creating a separate eval for each effort level. Use
+inline datasets or `dataset: "{{ root.datasets }}/<dataset>/dataset.yml"`; the variable
+refers to the current case's datasets directory. Keep evals under `experiments/<exp>/evals/<eval>/`.
+
+For custom Inspect tasks, declare `evaluation.scorers: [correctness]` and
+`metrics.primary: correctness/accuracy`. The scorer is an authored Python function in
+`task.py`; its metrics and repetition reduction belong to Inspect. Tamesu owns saved
+artifacts, costs, completion, comparisons, and review. Describe coverage and success
+criteria without claiming that authored prose is automatically verified.
+
+Never place API keys, tokens, customer secrets, or signed URLs in manifests, prompts,
+fixtures, or committed `.env` files.
+
+## Validate before execution
+
+```sh
+tamesu lint .
 tamesu plan <case>/<experiment>/<eval>
+tamesu run <case>/<experiment>/<eval> --arm baseline --limit-items 5 --repetitions 1 --dry-run
 ```
 
-Resolve lint failures. Inspect the expanded models, arms, repetitions, item count, calls,
-budget ceiling, estimated cost, maximum exposure, and execution blockers. Summarize these
-for the user, including unknown pricing or missing credentials.
+Resolve lint failures and inspect models, arms, unique items, repetitions, actual executions,
+probe status, budget, estimated exposure, and execution blockers. No activation or closing
+command is required. Authoring intent alone does not request paid provider execution.
 
-Only activate after the user has reviewed or explicitly requested activation:
-
-```sh
-tamesu activate <case>/<experiment>/<eval>
-```
-
-Activation changes the authored manifest from `draft` to `active`; it does not call a
-provider. Do not run `tamesu run` merely because authoring or activation was requested.
-Provider execution can spend money and requires separate user intent.
+For a reproducible probe use `--limit-items N --sample random --seed N`. Select an arm
+with repeatable `--arm`, a model with `--model`, or explicit items with repeatable `--item`.
+Use `--max-executions` to cap work and `--concurrency` / `--budget-usd` to set invocation limits.
 
 ## Interpret and preserve evidence
 
@@ -70,8 +84,7 @@ the user requests otherwise. Explain run state separately from item completion, 
 metrics, and cost. Probe runs are `partial` by design and do not count as formal evidence.
 
 Do not hand-edit generated `runs/`, `logs/`, `result.yml`, or `report.yml` evidence. Use
-`status`, `resume`, `rescore`, `compare`, and `leaderboard` as appropriate. Use `close`
-only after all planned work is banked and the result has been reviewed.
+`status`, `resume`, `rescore`, `compare`, and `leaderboard` as appropriate. Review conclusions in `analysis.md` after evaluating completion and success criteria.
 
 At handoff, name the authored files, state what variable each arm changes, report lint and
 plan results, and clearly distinguish remaining blockers from optional next steps.

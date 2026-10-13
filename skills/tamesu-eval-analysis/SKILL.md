@@ -13,7 +13,7 @@ Keep interpretation separate from recorded facts.
 Find the project root and resolve the requested `<case>/<experiment>/<eval>`. Read:
 
 - `eval.yml` for the question, intended comparison, primary metric, and lifecycle status;
-- the experiment README for the hypothesis and controlled variable, when present;
+- `experiment.yml` for the hypothesis, method, and authored success criteria;
 - `evaluation-report.md` and `leaderboard.md` for the deterministic aggregate view;
 - contributing `runs/<run-id>/report.yml` files for diagnostic metrics and item outcomes.
 
@@ -62,12 +62,9 @@ correctly label the analysis stale. Keep the body concise and open with a note t
 derived interpretation rather than evaluation evidence. Use
 these sections when they help:
 
-1. **Question** — what the eval was intended to answer.
-2. **Observed result** — completion, primary values, difference, variation, failures, and
-   cost.
-3. **Interpretation** — the narrowest conclusion supported by the observations.
-4. **Limitations** — dataset coverage, repetitions, excluded evidence, metric limits, and
-   unresolved tradeoffs.
+1. **Answer to the technical uncertainty** — whether the evidence answers the question and supports the success criteria.
+2. **What remains uncertain** — coverage, missing scenarios, other models, and real customer use.
+3. **Next experiments** — what to test next and why.
 5. **Next decision** — continue, narrow, stop, or run a specific follow-up experiment,
    with the evidence behind that recommendation.
 
@@ -77,3 +74,9 @@ what is missing.
 
 Never present `analysis.md` as evaluation evidence. It is a reviewable derived view written
 by a coding agent.
+
+Use `tamesu analyze <eval-id> --scaffold` to create these headings without a provider call.
+`--provider PROVIDER --model MODEL` requests model assistance and requires explicit execution
+intent. Preserve authored conclusions and require human review of generated interpretations.
+Inspect scorer/metric references such as `correctness/accuracy` are computed by Inspect,
+including repetition reduction. Probes remain visible but excluded from formal comparisons.

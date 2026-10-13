@@ -2,6 +2,16 @@
 
 Source of truth: `docs/happy-path-walkthrough2.md`. This plan compares that document with the current working tree, including the existing Inspect migration. It proposes implementation work; it does not change application behavior.
 
+## Implementation status
+
+Implemented the authored workflow: command groups and scaffolds, experiment YAML, human-readable case names, external dataset variables, Inspect scorer/metric references, shared run selection and dry runs, reproducible resumable probes, project browsing and authored-copy editing, completion scripts, and aligned reports, skills, schemas, and references.
+
+Repetitions retain separate resumable execution evidence. Inspect applies its configured repetition reducer and custom metrics to pooled saved sample scores; Tamesu freezes those statistics for offline reporting instead of averaging per-run custom metrics. The adapter identity version changed to distinguish these execution semantics from historical evidence.
+
+Success criteria remain authored prose for human assessment. Existing rubric and review behavior remains in place. New scaffolds retain a concrete starter model/provider so the starter can lint and plan; authors replace that configuration for their actual evaluation.
+
+Validation: all 333 tests passed, including local Inspect mock execution, nonlinear custom statistics, 12,000-execution planning, probe exclusion and resume, browser editing/conflict checks, and external-dataset package round trips. No paid evaluation was executed.
+
 ## Target contract
 
 - Author a case, then an experiment, then evaluations. Business context and hypotheses remain authored documentation.

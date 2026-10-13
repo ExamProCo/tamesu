@@ -40,6 +40,7 @@ def watch(
     sleep: Callable[[float], None] = time.sleep,
     emit: Callable[[str], None] = print,
     max_renders: int | None = None,
+    stop: threading.Event | None = None,
 ) -> int:
     """Render once, then again after each change. Returns the number of renders."""
     renders = 0
@@ -56,7 +57,7 @@ def watch(
 
     previous = snapshot(case_dir)
     once()
-    while max_renders is None or renders < max_renders:
+    while (max_renders is None or renders < max_renders) and not (stop and stop.is_set()):
         sleep(interval)
         current = snapshot(case_dir)
         if current == previous:

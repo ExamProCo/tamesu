@@ -18,6 +18,7 @@ from .identity import digest_file
 from .logging import CallLogWriter
 from .models import EvalContext, RunSpec
 from .planner import build_plan, items_by_id, limit_spec
+from .selection import RunOptions, selected_plan
 from .pricing import estimate_plan_cost, recorded_cost
 from .run_report import build_report
 from .tasks import task_for
@@ -30,30 +31,40 @@ def run_eval(
     limit_items: int | None = None,
     force: bool = False,
     trust_code: bool = False,
+    options: RunOptions | None = None,
 ) -> list[str]:
-    if limit_items is not None and limit_items < 1:
-        raise ExecutionError("--limit-items must be at least 1")
-
-    plan = build_plan(context)
-    specs = [spec for spec in plan.specs if only is None or spec.model == only]
-    if not specs:
-        raise ExecutionError("No planned run configurations match the requested filters.")
-    if not force and limit_items is None:
-        specs = [
-            spec
-            for spec in specs
-            if spec.specification_fingerprint not in plan.banked_run_ids
-        ]
-    if limit_items is not None:
-        specs = [limit_spec(spec, min(limit_items, len(spec.item_ids))) for spec in specs]
+    plan = selected_plan(context, options or RunOptions(model=only, limit_items=limit_items))
+    context = plan.context
+    specs = list(plan.specs)
+    if not force:
+        specs = [spec for spec in specs if spec.probe or spec.specification_fingerprint not in plan.banked_run_ids]
     if not specs:
         return []
 
     _check_budget(plan, tuple(specs))
     backend_for(context.evaluation).check_ready(context, specs, trust_code=trust_code)
     run_ids: list[str] = []
+    spent_this_run = 0.0
     for index, spec in enumerate(specs, start=1):
-        run_ids.append(execute_spec(context, spec, position=(index, len(specs))))
+        from dataclasses import replace
+        remaining = float(context.evaluation['defaults']['budget_usd']) - spent_this_run
+        if remaining <= 0:
+            raise ExecutionError('Run budget exhausted')
+        spec = replace(spec, budget_usd=remaining)
+        try:
+            run_id = execute_spec(context, spec, position=(index, len(specs)))
+        except (KeyboardInterrupt, ExecutionError):
+            _freeze_comparisons(context)
+            raise
+        run_ids.append(run_id)
+        manifest = load_yaml(context.eval_dir / 'runs' / run_id / 'run.yml')
+        cost = manifest.get('totals', {}).get('cost_usd')
+        if isinstance(cost, (int, float)):
+            spent_this_run += cost
+        elif index < len(specs):
+            # Unknown billing cannot support a guaranteed remaining allowance.
+            spent_this_run += min(spec.budget_usd, context.evaluation.get('execution', {}).get('limits', {}).get('cost_limit', spec.budget_usd))
+    _freeze_comparisons(context)
     return run_ids
 
 
@@ -335,17 +346,33 @@ def resume_run(context: EvalContext, run_id: str, *, trust_code: bool = False) -
         and spec.arm_id == resolved.get("arm")
         and spec.repetition == resolved.get("repetition")
     ]
+    if not candidates and manifest.get('probe'):
+        variants = [spec for spec in plan.specs if spec.provider == resolved.get('provider') and spec.model == resolved.get('model') and spec.arm_id == resolved.get('arm')]
+        options = manifest.get('selection', {}).get('options', {})
+        repetition = resolved.get('repetition')
+        if variants and isinstance(repetition, int) and 1 <= repetition <= options.get('repetitions', 0):
+            from .planner import make_run_spec
+            variant = variants[0]
+            candidates = [make_run_spec(context, provider=variant.provider, model=variant.model, arm_id=variant.arm_id,
+                arm=next(arm for arm in context.evaluation['arms'] if arm['id'] == variant.arm_id),
+                repetition=repetition, item_ids=variant.item_ids, prompts=variant.prompts, parameters=variant.parameters, probe=False)]
     if not candidates:
         raise ExecutionError("The run no longer matches a planned configuration.")
     spec = candidates[0]
     saved_items = tuple(manifest.get("selection", {}).get("item_ids", []))
     if manifest.get("probe"):
-        if saved_items != spec.item_ids[: len(saved_items)]:
+        if not set(saved_items).issubset(spec.item_ids):
             raise ExecutionError("The probe item selection no longer matches the dataset.")
-        spec = limit_spec(spec, len(saved_items))
+        from dataclasses import replace
+        from .identity import digest_value
+        spec = replace(spec, item_ids=saved_items, probe=True, specification_fingerprint=digest_value({
+            "original_specification_fingerprint": spec.specification_fingerprint,
+            "item_ids": list(saved_items), "probe": True}))
     elif saved_items != spec.item_ids:
         raise ExecutionError("The run item selection no longer matches the eval.")
 
+    from dataclasses import replace
+    spec = replace(spec, concurrency=resolved.get("concurrency", spec.concurrency), budget_usd=resolved.get("budget_usd", spec.budget_usd), selection_options=manifest.get("selection", {}).get("options", {}))
     identity = manifest.get("identity", {})
     mismatches: list[str] = []
     if identity.get("specification_fingerprint") != spec.specification_fingerprint:
@@ -357,9 +384,15 @@ def resume_run(context: EvalContext, run_id: str, *, trust_code: bool = False) -
             f"Cannot resume {run_id}: {' and '.join(mismatches)} fingerprint changed."
         )
 
+    evaluation = dict(context.evaluation)
+    evaluation['defaults'] = dict(evaluation['defaults'], budget_usd=spec.budget_usd)
+    context = replace(context, evaluation=evaluation)
+    plan = replace(plan, context=context)
     _check_budget(plan, (spec,))
     backend_for(context.evaluation).check_ready(context, [spec], trust_code=trust_code)
-    return execute_spec(context, spec, existing_run_dir=run_dir)
+    result = execute_spec(context, spec, existing_run_dir=run_dir)
+    _freeze_comparisons(context)
+    return result
 
 
 def _log_item_terminal(
@@ -409,7 +442,7 @@ def _run_manifest(
             "content_fingerprint": spec.content_fingerprint,
             "content_inventory": spec.content_inventory,
         },
-        "selection": {"item_ids": list(spec.item_ids)},
+        "selection": {"item_ids": list(spec.item_ids), "options": spec.selection_options},
         "resolved": {
             "task": context.evaluation.get("task", context.case.get("default_task")),
             "provider": spec.provider,
@@ -464,12 +497,11 @@ def _totals(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _check_budget(plan: Any, specs: tuple[RunSpec, ...]) -> None:
     estimate = estimate_plan_cost(plan, specs)
-    spent = recorded_cost(plan)
     ceiling = float(plan.context.evaluation["defaults"]["budget_usd"])
-    projected = spent.known_usd + estimate.maximum_usd
+    projected = estimate.maximum_usd
     if projected > ceiling:
         raise ExecutionError(
-            f"Recorded cost plus maximum priced exposure ${projected:.6f} exceeds the "
+            f"Maximum priced exposure ${projected:.6f} exceeds the "
             f"${ceiling:.2f} budget ceiling. Lower max_tokens, reduce the plan, or "
             "raise budget_usd."
         )
@@ -477,3 +509,19 @@ def _check_budget(plan: Any, specs: tuple[RunSpec, ...]) -> None:
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _freeze_comparisons(context: EvalContext) -> None:
+    requested = [context.evaluation['metrics']['primary'], *context.evaluation['metrics'].get('secondary', [])]
+    if not any('/' in key for key in requested):
+        return
+    from collections import defaultdict
+    from .inspect_metrics import freeze_statistics
+    groups = defaultdict(list)
+    plan = build_plan(context)
+    for spec in plan.specs:
+        run_id = plan.banked_run_ids.get(spec.specification_fingerprint)
+        if run_id:
+            groups[(spec.provider, spec.model, spec.arm_id)].append(run_id)
+    for run_ids in groups.values():
+        freeze_statistics(context, run_ids)

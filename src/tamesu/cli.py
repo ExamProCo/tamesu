@@ -20,6 +20,7 @@ from .discovery import (
 from .backends import backend_for
 from .errors import ExecutionError, TamesuError
 from .environment import load_environment
+from .selection import RunOptions, add_selection_arguments, options_from_args, selected_plan
 from .planner import build_plan
 from .packaging import (
     fork_archive,
@@ -55,14 +56,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
+    completion_parser = subparsers.add_parser('completion', help='Print a Bash or Zsh completion script.')
+    completion_parser.add_argument('shell', choices=['bash', 'zsh'])
+    complete_parser = subparsers.add_parser('_complete', help=argparse.SUPPRESS)
+    complete_parser.add_argument('words', nargs=argparse.REMAINDER)
+
     new_parser = subparsers.add_parser("new", help="Create a case, experiment, or eval from a template.")
     new_parser.add_argument("level", choices=["case", "experiment", "eval"])
     new_parser.add_argument("path", help="case | case/experiment | case/experiment/eval")
 
+    for command, level in (("case", "case"), ("exp", "experiment"), ("eval", "eval")):
+        group = subparsers.add_parser(command, help=f"Create {level} documentation.")
+        actions = group.add_subparsers(dest="create_action", required=True)
+        create_parser = actions.add_parser("new", help=f"Create a {level} from a template.")
+        create_parser.add_argument("path")
+        create_parser.set_defaults(level=level)
+
     show_parser = subparsers.add_parser(
         "show", help="Serve the case page on localhost; re-renders on change (Ctrl-C to stop)."
     )
-    show_parser.add_argument("case", nargs="?", help="Case name; optional when the project has one case.")
+    show_parser.add_argument("case", nargs="?", help="Case name; omit to list all cases.")
     show_parser.add_argument("--port", type=int, default=8000, help="Port (default 8000).")
     show_parser.add_argument("--open", action="store_true", help="Also open it in a browser.")
 
@@ -79,11 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan_parser = subparsers.add_parser("plan", help="Preview concrete work and blockers.")
     plan_parser.add_argument("eval_id")
+    add_selection_arguments(plan_parser)
 
     run_parser = subparsers.add_parser("run", help="Execute planned eval work.")
     run_parser.add_argument("eval_id")
-    run_parser.add_argument("--only", metavar="MODEL")
-    run_parser.add_argument("--limit-items", type=int, metavar="N")
+    add_selection_arguments(run_parser)
+    run_parser.add_argument("--dry-run", action="store_true")
     run_parser.add_argument("--force", action="store_true")
     run_parser.add_argument(
         "--trust-code",
@@ -232,7 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-MAIN_COMMANDS = ("new", "run", "pack", "unpack", "show", "review")
+MAIN_COMMANDS = ("case", "exp", "eval", "plan", "run", "status", "show", "report", "analyze")
 
 
 def _group_commands(parser: argparse.ArgumentParser, subparsers: Any) -> None:
@@ -243,7 +257,7 @@ def _group_commands(parser: argparse.ArgumentParser, subparsers: Any) -> None:
     def lines(names: Sequence[str]) -> str:
         return "\n".join(f"  {name.ljust(width)}{helps[name]}" for name in names)
 
-    advanced = [name for name in helps if name not in MAIN_COMMANDS]
+    advanced = [name for name in helps if name not in MAIN_COMMANDS and not name.startswith("_")]
     parser.formatter_class = argparse.RawDescriptionHelpFormatter
     parser.epilog = (
         f"start here:\n{lines(MAIN_COMMANDS)}\n\nother commands:\n{lines(advanced)}\n\n"
@@ -308,7 +322,19 @@ def dispatch(args: argparse.Namespace) -> int:
         destination = build_site(args.registry, args.output)
         print(f"Built showcase: {destination}")
         return 0
-    if args.command == "new":
+    if args.command == 'completion':
+        from .completion import shell_script
+        print(shell_script(args.shell))
+        return 0
+    if args.command == '_complete':
+        from .completion import candidates
+        try:
+            root = find_project_root()
+        except TamesuError:
+            root = Path.cwd()
+        print('\n'.join(candidates(root, args.words)))
+        return 0
+    if args.command in {"new", "case", "exp", "eval"}:
         from .scaffold import create
 
         try:
@@ -325,17 +351,22 @@ def dispatch(args: argparse.Namespace) -> int:
     if args.command == "list":
         return command_list(project_root)
     if args.command == "show":
+        if args.case is None:
+            return command_show_project(project_root, args)
         args.output, args.watch, args.serve, args.strict = None, False, True, False
         return command_present(project_root, args)
     if args.command == "plan":
-        return command_plan(project_root, args.eval_id)
+        return command_plan(project_root, args.eval_id, options=options_from_args(args))
 
     if args.command == "run":
+        if args.dry_run:
+            return command_plan(project_root, args.eval_id, options=options_from_args(args))
         return command_run(
             project_root,
             args.eval_id,
             only=args.only,
             limit_items=args.limit_items,
+            options=options_from_args(args),
             force=args.force,
             trust_code=args.trust_code,
         )
@@ -409,8 +440,25 @@ def command_lint(path: Path, *, portable: bool = False) -> int:
             for candidate in discover_eval_paths(project_root)
             if _is_within(candidate, resolved)
         ]
+    from .config import _validate_case, validate_experiment
+    document_errors = []
+    for case_path in project_root.glob('cases/*/case.yml'):
+        if _is_within(case_path, resolved) or case_path == resolved:
+            try:
+                _validate_case(load_yaml(case_path), case_path.parent, document_errors)
+            except TamesuError as exc:
+                document_errors.append(str(exc))
+    for experiment_path in project_root.glob('cases/*/experiments/*/experiment.yml'):
+        if _is_within(experiment_path, resolved) or experiment_path == resolved:
+            try:
+                validate_experiment(load_yaml(experiment_path), document_errors)
+            except TamesuError as exc:
+                document_errors.append(str(exc))
+    if document_errors:
+        raise TamesuError('\n'.join(document_errors))
     if not eval_paths:
-        raise TamesuError(f"No eval.yml files found under {resolved}")
+        print('Validated authored documentation; no evaluations yet.')
+        return 0
 
     failures: list[str] = []
     case_dirs: set[Path] = set()
@@ -495,9 +543,14 @@ def _image_pricing_label(pricing: Any) -> str:
     return "unknown"
 
 
-def command_plan(project_root: Path, eval_id: str) -> int:
+def command_plan(project_root: Path, eval_id: str, *, options: RunOptions | None = None) -> int:
     context = load_eval_context(project_root, eval_id)
-    plan = build_plan(context)
+    plan = selected_plan(context, options or RunOptions())
+    context = plan.context
+    print(f"Probe: {any(spec.probe for spec in plan.specs)}")
+    print(f"Total selected executions: {sum(len(spec.item_ids) for spec in plan.specs)}")
+    for spec in plan.specs:
+        print(f"  {spec.label}: {len(spec.item_ids)} items")
     models = sorted({spec.model for spec in plan.specs})
     arms = sorted({spec.arm_id for spec in plan.specs})
     calls = sum(len(spec.item_ids) for spec in plan.owed_specs)
@@ -550,12 +603,14 @@ def command_run(
     limit_items: int | None,
     force: bool,
     trust_code: bool = False,
+    options: RunOptions | None = None,
 ) -> int:
     context = load_eval_context(project_root, eval_id)
     run_ids = run_eval(
         context,
         only=only,
         limit_items=limit_items,
+        options=options,
         force=force,
         trust_code=trust_code,
     )
@@ -936,3 +991,30 @@ def _is_within(path: Path, parent: Path) -> bool:
 
 if __name__ == "__main__":
     main()
+
+
+def command_show_project(root: Path, args: argparse.Namespace) -> int:
+    import time
+    import webbrowser
+    from .live import serve_project
+    server = serve_project(root, args.port)
+    url = f"http://localhost:{server.server_address[1]}/"
+    print(f"Serving cases at {url} (Ctrl-C to stop)")
+    if args.open:
+        webbrowser.open(url)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print('stopped')
+    finally:
+        server.shutdown()
+        server.server_close()
+        for stop, watcher in server.case_watchers:
+            stop.set()
+            watcher.join(timeout=2)
+        for child in server.case_servers.values():
+            child.shutdown()
+            child.server_close()
+            child.review_temporary.cleanup()
+    return 0

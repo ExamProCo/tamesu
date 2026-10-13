@@ -66,3 +66,23 @@ Read the [author-first walkthrough](docs/happy-path-walkthrough.md) or
 ```sh
 python -m unittest discover -s tests -v
 ```
+
+### Authored experiment workflow
+
+```sh
+tamesu case new base-calc
+tamesu exp new base-calc/add
+tamesu eval new base-calc/add/int
+tamesu lint .
+tamesu plan base-calc/add/int
+tamesu run base-calc/add/int --limit-items 5 --repetitions 1 --dry-run
+tamesu show
+```
+
+Fill in `case.yml`, `experiment.yml`, and the eval's `eval.yml` and Inspect `task.py`.
+Use `evaluation.scorers` and Inspect metric references such as `correctness/accuracy`.
+External datasets can use `{{ root.datasets }}/<dataset>/dataset.yml`.
+`show` lists cases and provides a documentation editor. `report` exports an optional
+Markdown snapshot; `analyze --scaffold` creates an interpretation template without AI.
+See [the authored walkthrough](docs/happy-path-walkthrough2.md) and
+[CLI reference](docs/reference/cli.md) for limited runs and shell completion.

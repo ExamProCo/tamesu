@@ -7,7 +7,7 @@
   "required": ["schema_version", "name", "description", "items"],
   "properties": {
     "schema_version": {"const": 1},
-    "name": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "name": {"type": "string", "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"},
     "description": {"type": "string", "minLength": 1},
     "shared_assets": {
       "type": "object",
@@ -25,7 +25,7 @@
         "additionalProperties": false,
         "required": ["id"],
         "properties": {
-          "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+          "id": {"type": "string", "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"},
           "input": {"type": "object"},
           "assets": {
             "type": "object",

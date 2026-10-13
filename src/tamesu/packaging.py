@@ -130,7 +130,7 @@ def load_publication(case_dir: Path, *, required: bool = True) -> dict[str, Any]
                 errors.append("publication.forked_from.version must be semantic version text")
             if not _valid_digest(parent.get("content_digest")):
                 errors.append("publication.forked_from.content_digest must be a sha256 digest")
-    case_name = load_yaml(case_dir / "case.yml").get("name")
+    case_name = case_dir.name
     if publication.get("name") != case_name:
         errors.append("publication.name must match case.name")
     if errors:
@@ -144,6 +144,8 @@ def validate_portable(case_dir: Path) -> None:
     for eval_path in sorted(case_dir.glob("experiments/*/evals/*/eval.yml")):
         evaluation = load_yaml(eval_path)
         raw_dataset = evaluation.get("dataset")
+        if isinstance(raw_dataset, str):
+            raw_dataset = raw_dataset.replace("{{ root.datasets }}", str(case_dir / "datasets"))
         dataset_path = None if isinstance(raw_dataset, dict) else _portable_reference(eval_path.parent, raw_dataset, case_dir, "eval.dataset", failures)
         _portable_reference(eval_path.parent, evaluation.get("output_schema"), case_dir, "eval.output_schema", failures)
         for index, arm in enumerate(evaluation.get("arms", [])):
@@ -176,8 +178,8 @@ def pack_case(case_dir: Path, output_dir: Path | None = None, *, presentation_di
     if publication is None:
         case = load_yaml(case_dir / "case.yml")
         publication = {
-            "schema_version": 1, "name": case["name"], "publisher": "local",
-            "version": "0.1.0", "title": case["title"], "summary": case["description"],
+            "schema_version": 1, "name": case_dir.name, "publisher": "local",
+            "version": "0.1.0", "title": case.get("title") or case["name"], "summary": case["description"],
             "authors": [{"name": "Local experiment"}], "license": "Unspecified",
             "profile": "full", "tags": [],
             "data_review": {"acknowledged": True, "note": "Local portable evidence archive; no publication requested."},
@@ -441,7 +443,7 @@ def _report_only_path(parts: tuple[str, ...]) -> bool:
         return False
     if "prompts" in parts or "schemas" in parts:
         return True
-    if parts[-1] in {"README.md", "eval.yml", "analysis.md", "evaluation-report.md", "leaderboard.md", "run.yml", "report.yml", "result.yml"}:
+    if parts[-1] in {"experiment.yml", "README.md", "eval.yml", "analysis.md", "evaluation-report.md", "leaderboard.md", "run.yml", "report.yml", "result.yml"}:
         return True
     return False
 
@@ -667,9 +669,9 @@ def _validate_payload_manifests(
     case = _payload_yaml(payload, "case.yml", required=True)
     if case.get("schema_version", 1) != 1:
         raise TamesuError("payload/case.yml has an unsupported schema_version")
-    if not isinstance(case.get("name"), str) or not ID_PATTERN.fullmatch(case["name"]):
+    if not isinstance(case.get("name"), str) or not case["name"].strip():
         raise TamesuError("payload/case.yml has an invalid case name")
-    if publication.get("name") != case.get("name"):
+    if "title" in case and ID_PATTERN.fullmatch(case["name"]) and publication.get("name") != case.get("name"):
         raise TamesuError("package publication.name does not match payload case.name")
     for path in sorted(payload):
         filename = PurePosixPath(path).name
@@ -708,6 +710,8 @@ def _validate_payload_manifests(
         for label, raw in references:
             if not isinstance(raw, str) or not raw:
                 raise TamesuError(f"payload/{path} contains an invalid {label} reference")
+            if label == "dataset":
+                raw = raw.replace("{{ root.datasets }}", "../../../../datasets")
             resolved = _normalize_payload_reference(base, raw)
             if resolved not in payload:
                 raise TamesuError(f"payload/{path} has a dangling {label} reference: {raw}")

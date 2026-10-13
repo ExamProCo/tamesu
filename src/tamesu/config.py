@@ -17,7 +17,7 @@ from .tasks import TASKS, get_task, supported_backends
 from .tasks.base import parse_mechanical_entry
 
 
-ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+ID_PATTERN = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 SUPPORTED_TASKS = set(TASKS)
 SUPPORTED_PROVIDERS = {"anthropic", "openai", "meta", "grok", "bedrock", "gemini"}
 
@@ -114,14 +114,13 @@ def _validate_case(case: dict[str, Any], case_dir: Path, errors: list[str]) -> N
     )
     _validate_schema_version(case, "case", errors)
     name = _required_string(case, "name", "case", errors)
-    _validate_id(name, "case.name", errors)
-    if name and name != case_dir.name:
-        errors.append(f"case.name must match directory name {case_dir.name!r}")
-    _required_string(case, "title", "case", errors)
+    if "title" in case:
+        _required_string(case, "title", "case", errors)
     _required_string(case, "description", "case", errors)
     _required_string(case, "business_use", "case", errors)
     _required_string(case, "current_problem", "case", errors)
-    _required_string(case, "technical_uncertainty", "case", errors)
+    if "technical_uncertainty" in case:
+        _required_string(case, "technical_uncertainty", "case", errors)
     task = case.get("default_task")
     if task is not None and task not in SUPPORTED_TASKS:
         errors.append(f"case.default_task is not implemented: {task!r}")
@@ -462,6 +461,11 @@ def apply_eval_defaults(evaluation: Any, eval_dir: Path, project_root: Path) -> 
     omitted field and its written-out default produce the same run identity."""
     if not isinstance(evaluation, dict):
         return evaluation
+    scoring = evaluation.get("evaluation")
+    if isinstance(scoring, dict) and "scorers" in scoring:
+        if "mechanical" in scoring:
+            raise ConfigError("Use evaluation.scorers or evaluation.mechanical, not both")
+        scoring["mechanical"] = scoring.pop("scorers")
     evaluation.setdefault("execution", {})
     if isinstance(evaluation["execution"], dict):
         evaluation["execution"].setdefault("backend", "inspect")
@@ -508,11 +512,17 @@ def load_eval_context(project_root: Path, eval_id: str) -> EvalContext:
     else:
         if not isinstance(raw_dataset_path, str) or not raw_dataset_path:
             raise ConfigError("eval.dataset must be a path or an inline mapping")
+        raw_dataset_path = raw_dataset_path.replace("{{ root.datasets }}", str(case_dir / "datasets"))
+        if "{{" in raw_dataset_path or "}}" in raw_dataset_path:
+            raise ConfigError("Unknown dataset path variable; supported: {{ root.datasets }}")
         dataset_path = resolve_contained(eval_dir, raw_dataset_path, project_root)
         dataset = load_yaml(dataset_path)
 
     errors: list[str] = []
     _validate_case(case, case_dir, errors)
+    experiment_path = experiment_dir / "experiment.yml"
+    if experiment_path.exists():
+        validate_experiment(load_yaml(experiment_path), errors)
     _validate_dataset(dataset, errors)
     output_schema_path, output_schema = _validate_eval(
         evaluation, eval_dir, project_root, case, dataset, errors
@@ -538,3 +548,13 @@ def load_eval_context(project_root: Path, eval_id: str) -> EvalContext:
 
 def load_eval_context_from_path(project_root: Path, path: Path) -> EvalContext:
     return load_eval_context(project_root, eval_id_from_path(project_root, path))
+
+
+def validate_experiment(experiment: dict[str, Any], errors: list[str]) -> None:
+    _reject_unknown(experiment, {"schema_version", "name", "description", "hypothesis", "success_criteria"}, "experiment", errors)
+    _validate_schema_version(experiment, "experiment", errors)
+    for field in ("name", "description", "hypothesis"):
+        _required_string(experiment, field, "experiment", errors)
+    criteria = _require_list(experiment.get("success_criteria"), "experiment.success_criteria", errors)
+    if not criteria or any(not isinstance(value, str) or not value.strip() for value in criteria):
+        errors.append("experiment.success_criteria must contain non-empty strings")

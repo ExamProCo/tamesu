@@ -50,6 +50,7 @@ class RunSpec:
     content_fingerprint: str
     content_inventory: dict[str, str] = field(default_factory=dict)
     probe: bool = False
+    selection_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

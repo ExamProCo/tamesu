@@ -1,13 +1,13 @@
 # Command-line interface
 
-> **Status:** These commands are implemented for structured-text evals in Tamesu 0.1.
-> Image tasks, model judges, human review, and machine-readable CLI output remain planned.
-
-Tamesu's command-line interface is designed around a small workflow:
+The main workflow is:
 
 ```text
-lint → plan → activate → run → status → compare → report → close
+case new → exp new → eval new → lint → plan → run → status → show
 ```
+
+`report` optionally exports Markdown; `analyze --scaffold` creates an authored interpretation.
+There is no activation or closing step.
 
 The examples use `tamesu` as the executable name. Commands operate on files in the
 current repository and keep all evaluation evidence inspectable on disk.
@@ -20,7 +20,6 @@ current repository and keep all evaluation evidence inspectable on disk.
 | `list` | Show discovered cases, experiments, and evals | No | No |
 | `models` | Show the built-in provider/model registry and pricing | No | No |
 | `plan` | Expand an eval and report work, cost, and blockers | No | No |
-| `activate` | Validate and move a draft eval to active | Yes | No |
 | `run` | Execute planned run configurations | Yes | Yes |
 | `status` | Reconcile the plan with evidence on disk | No | No |
 | `resume` | Continue a compatible partial run | Yes | Yes |
@@ -31,7 +30,6 @@ current repository and keep all evaluation evidence inspectable on disk.
 | `compare` | Compare compatible completed runs | No | No |
 | `leaderboard` | Rebuild an eval's Markdown leaderboard | Yes | No |
 | `report` | Build a human-readable eval report | Yes | No |
-| `close` | Verify completion and close an eval | Yes | No |
 | `present` | Render a static case study (offline, read-only, works before any run) | Yes | No |
 | `analyze` | Write `analysis.md`: an authored scaffold, or a model-assisted interpretation | Yes | `--scaffold`: No; with `--model`: **Yes** |
 | `pack` | Build a deterministic case archive | Yes | No |
@@ -637,3 +635,50 @@ not implemented in Tamesu 0.1.
 For the files these commands read and write, see
 [Repository and file structure](file-structure.md). For configuration fields, see the
 [Manifest reference](manifests.md).
+
+## Authored walkthrough commands
+
+```sh
+tamesu case new base-calc
+tamesu exp new base-calc/add
+tamesu eval new base-calc/add/int
+tamesu lint .
+tamesu plan base-calc/add/int
+tamesu run base-calc/add/int --arm baseline --limit-items 5 --repetitions 1 --dry-run
+tamesu show
+tamesu report base-calc/add/int
+tamesu analyze base-calc/add/int --scaffold
+```
+
+`show` lists all cases, reflects disk edits, and links to an editor for authored YAML text.
+`show <case>` opens a case directly. Results in the browser and Markdown use the same stored evidence.
+
+`plan` and `run --dry-run` accept the same selection flags as `run`:
+
+| Flag | Meaning |
+|---|---|
+| `--model NAME` | Select a model (`--only` remains an alias) |
+| `--arm NAME` | Select an arm; repeatable |
+| `--limit-items N` | Select N unique items |
+| `--item ID` | Select explicit items; repeatable; conflicts with `--limit-items` |
+| `--sample random --seed N` | Reproducible random sampling with `--limit-items` |
+| `--repetitions N` | Override repetitions for this invocation |
+| `--max-executions N` | Cap actual item × model × arm × repetition executions |
+| `--concurrency N` | Override parallelism |
+| `--budget-usd N` | Override the invocation budget ceiling |
+| `--dry-run` | Preview without execution or writing run evidence |
+
+Item restrictions, repetition overrides, and execution caps create probes. Model or arm
+filters alone can complete the selected canonical configurations. Probes remain visible
+but do not contribute to normal comparisons. Execution caps may leave uneven coverage;
+the preview lists the actual items per configuration.
+
+Enable tab completion once per shell session (or put the line in your shell startup file):
+
+```sh
+source <(tamesu completion bash)
+# Zsh: run compinit first, then:
+source <(tamesu completion zsh)
+```
+
+The legacy `tamesu new case|experiment|eval PATH` forms remain supported.
