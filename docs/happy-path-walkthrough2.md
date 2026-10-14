@@ -89,12 +89,16 @@ The purpose of our case is to:
 
 Writing out these three things will help us think what we need define as experiments.
 
+[todo] the generated case.yml had a name and title, title is name now, and old title in really the handle based on the folder name that acts as its unique id slug
 
 ```yml
 name: Orderwisp - Basic Calculation Accuracy
 description: Does Orderwisp accurately handle basic calculations?
 business_use: A human support agent will directly ask Orderwisp to perform basic calucations
 current_problem: There is a lack of documented evidence to demonstrate to our pilot customer that Orderwisp can reliably perform basic calculations to go beyond pilot into production.
+technical_uncertainty: |
+  LLMs by nature are not 100% consistent, and so its reasonable to believe they could
+  makes a mistake, but is that true for math? And at what volume will it take for us to observe?
 ```
 
 > Recommend that you write your own draft, and not have AI generate our your initial case information because it can often scope the case wrong.
@@ -103,11 +107,16 @@ current_problem: There is a lack of documented evidence to demonstrate to our pi
 `case.yml` explains the purpose. `eval.yml` holds inputs, prompts, model settings,
 and acceptance rules. `task.py` is the Inspect task that generates and scores answers.
 
-At anytime we can preview our case in the web-browser
+At anytime we can preview our case in the web-browser,
+it will by default start on port 8000 otherwise it will start on the next avaliable port.
 
 ```sh
 tamesu show
 ```
+[todo] tamesu show: the port is already in use but I dont know the default port (its 8000), it should open on another port and let you know the port is in use.
+[todo] tamesu show: for some reason the case has its own port: 38721, this is confusing as you'd expect everything to live on the same port
+[todo] tamesu show: there is no back button the case page to the cases page.
+[todo] cases and experiments we should be able to add, edit directly from the UI, the should have forms, not simply just press add and it adds.
 
 This will serve a simple http-server.
 We will be able to see a list of cases.
@@ -376,10 +385,10 @@ metrics:
 - Notice our dataset is too small, we are suppose to have 100 unique examples, we'll need an external dataset.
 
 ```yml
-dataset: "{{ root.datasets }}/integer-addition-v1/dataset.yml"
+dataset: "{{ root.datasets }}/integer-addition-v1.yml"
 ```
 
-The following path `./cases/base-calc/datasets/integer-addition-v1/dataset.yml`:
+The following path `./cases/base-calc/datasets/integer-addition-v1.yml`:
 
 ```yml
 schema_version: 1
@@ -467,9 +476,46 @@ https://inspect.aisi.org.uk/scoring.html
 
 ## Workflow
 
+Now that we are ready to run a few things:
+
 
 ```sh
 tamesu lint . # validate the config and require files
+```
+
+Before we run our experiment notice that the concurrency is set to 1 based on the default.
+That will take a long time. I would suggest asking your coding harness to check your rate limits
+for your targeted API. 
+
+Batching would be great for experiments if you're not interested in measure latency.
+We haven't test batching yet as a test so not sure the flow through tamesu.
+
+```sh
+> The concurrency of my runs appears to default to 1, what actaully could I run this for concurrency for Meta's API? 
+https://dev.meta.ai/docs/pricing-rate-limits#rate-limits
+```
+
+```sh
+I’d start with concurrency 20 for your current muse-spark-1.3 eval, then try 50 if it runs without rate-limit errors.
+
+Your eval.yml (cases/base-calc/experiments/add/evals/int/eval.yml:24) explicitly sets concurrency: 1. Meta currently allows standard muse-spark-1.2 3,000 requests/minute and 4 million tokens/minute, shared across your team. It lists no separate concurrent-request cap for this model. Meta rate limits
+
+Concurrency depends on request duration:
+
+Approximate concurrency ceiling =
+min(RPM, TPM ÷ average tokens per request)
+× average request duration in seconds ÷ 60
+
+For example, with 2-second requests and 1,000 total tokens/request, the theoretical ceiling is 100 concurrent requests. Running at 50 leaves useful headroom. Your short arithmetic prompts make 20–50 a reasonable starting range, though this needs confirmation from actual latency and rate-limit headers.
+
+The proposed setting is:
+
+defaults:
+  concurrency: 20
+
+Your config also has retries: 0; for higher concurrency, make sure 429 responses retry with backoff and respect Retry-After, as Meta recommends. Contributor models have a much lower 150 RPM limit, so this recommendation applies to your current standard model. Meta limits and retry guidance
+
+I haven’t changed the config.
 ```
 
 These command are all the eval level.
@@ -498,6 +544,10 @@ Before you do a real run you may want to do a limited run.
 A run using --limit-items won’t affect the normal report’s comparison metrics. 
 Tamesu marks it as a probe and excludes it from the completed runs used for those comparisons.
 The UI will show limited runs, but its not part of the final reporting.
+
+```sh
+if I want to do a sanity check whats the limited run? I should run?
+```
 
 Limited runs:
 
